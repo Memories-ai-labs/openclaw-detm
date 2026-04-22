@@ -5,7 +5,7 @@ Desktop Environment Task Manager (DETM) — an MCP server that gives AI agents t
 ## Quick Install
 
 ```bash
-git clone https://github.com/alxdofficial/openclaw-memoriesai.git
+git clone https://github.com/Memories-ai-labs/openclaw-detm.git
 cd openclaw-memoriesai
 OPENROUTER_API_KEY=sk-or-... ./install.sh
 ```

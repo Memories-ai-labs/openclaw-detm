@@ -134,26 +134,7 @@ Returns `success`, `summary`, `actions_taken`, `session_id`. The session is reco
 
 ## Desktop Control
 
-### `desktop_action`
-
-Raw xdotool control. Pass `task_id` to link the action to a task.
-
-| Action | Params | Description |
-|--------|--------|-------------|
-| `click` | x, y, button | Click at coordinates |
-| `double_click` | x, y | Double-click |
-| `type` | text | Type text |
-| `press_key` | text | Press key (e.g., "Return", "ctrl+c") |
-| `mouse_move` | x, y | Move mouse |
-| `drag` | x, y, x2, y2, button | Drag from (x,y) to (x2,y2) |
-| `screenshot` | — | Save screenshot, return path |
-| `list_windows` | — | List all windows |
-| `find_window` | window_name | Find window by name |
-| `focus_window` | window_id/window_name | Focus a window |
-| `resize_window` | window_id/window_name, width, height | Resize |
-| `move_window` | window_id/window_name, x, y | Move |
-| `close_window` | window_id/window_name | Close |
-| `get_mouse_position` | — | Current mouse coordinates |
+All GUI interaction (clicking, typing, scrolling, keyboard shortcuts) goes through `gui_agent`. Raw xdotool control via `desktop_action` was removed — the main LLM shouldn't guess pixel coordinates. For window management and other X11 tasks, use OpenClaw's native `exec` tool with `xdotool`/`wmctrl` directly.
 
 ### `desktop_look`
 

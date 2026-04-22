@@ -59,14 +59,11 @@ Each entry adds one refinement pass. `[300, 150]` gives the 3-pass pipeline abov
 
 ---
 
-## Tool Split: gui_agent vs desktop_action
+## Tool Split: gui_agent only
 
-| Tool | Input | Use when |
-|---|---|---|
-| `gui_agent` | Natural language only | You know *what* to click, not *where* |
-| `desktop_action` | Explicit pixel coordinates | You have exact coords (from `desktop_look` or `gui_agent`) |
+All GUI interaction flows through `gui_agent` with natural language instructions. The main LLM doesn't pass pixel coordinates — the supervisor + UI-TARS handle grounding internally.
 
-**`gui_agent` no longer accepts `click(x, y)` syntax.** Any raw coordinates passed to it will be treated as NL and sent to the grounding model (which will fail to parse them). Use `desktop_action` for pixel-exact operations.
+Raw `desktop_action` (pixel-exact `click(x, y)`) was removed because the main LLM has no screenshot→verify loop and guessing coordinates leads to incorrect clicks. The supervisor is the only component that uses pixel coordinates, and it verifies each cursor placement visually before acting.
 
 This eliminates the most common source of incorrect clicks: the main LLM hallucinating coordinates that were never visible on the current screen.
 

@@ -238,7 +238,7 @@ If reality diverges from the plan, use `task_item_update(status="scrapped")` + `
 - `video_record` — record screen/window clip
 
 ### Video Intelligence
-- `mavi_understand` — record screen, ask a question about the video (for audio/motion content like TikTok sounds, animations, live feeds)
+- `mavi_understand` — record screen, ask a question about the video (for audio/motion content like TikTok sounds, animations, live feeds). **Requires `MAVI_API_KEY` to be set** — will fail without it.
 
 ### System
 - `health_check` — full DETM diagnostic (see **Doctor & narration** below)
@@ -350,7 +350,7 @@ idempotent (safe to re-run).
 
 ### Repository
 
-- **Source:** https://github.com/alxdofficial/openclaw-memoriesai.git
+- **Source:** https://github.com/Memories-ai-labs/openclaw-detm.git
 - **Default checkout:** `~/openclaw-memoriesai/`  (use this unless the
   user specifies otherwise)
 - **Branch:** `master`
@@ -358,7 +358,7 @@ idempotent (safe to re-run).
 ### Install (first time)
 
 ```
-git clone https://github.com/alxdofficial/openclaw-memoriesai.git ~/openclaw-memoriesai
+git clone https://github.com/Memories-ai-labs/openclaw-detm.git ~/openclaw-memoriesai
 cd ~/openclaw-memoriesai
 OPENROUTER_API_KEY=sk-or-... ./install.sh
 ```
