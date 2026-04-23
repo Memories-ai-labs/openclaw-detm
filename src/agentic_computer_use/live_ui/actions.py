@@ -101,13 +101,18 @@ def _smooth_mousemove(x: int, y: int, display: str) -> str:
 
 
 def _humanized_click(btn: str, display: str) -> str:
-    """Click with mousedown/dwell/mouseup when humanize is on."""
+    """Click with mousedown/dwell/mouseup when humanize is on.
+
+    --clearmodifiers on click/mousedown/mouseup prevents stuck Ctrl/Shift/etc. from a prior
+    key_press (e.g. ctrl+l) turning this click into a modified click — which in Firefox
+    opens links in new windows/tabs instead of activating them.
+    """
     if not humanize.is_enabled():
-        return _xdotool(["click", btn], display)
+        return _xdotool(["click", "--clearmodifiers", btn], display)
     env = {**os.environ, "DISPLAY": display}
-    subprocess.run(["xdotool", "mousedown", btn], capture_output=True, timeout=2, env=env)
+    subprocess.run(["xdotool", "mousedown", "--clearmodifiers", btn], capture_output=True, timeout=2, env=env)
     time.sleep(humanize.click_dwell_s())
-    r = subprocess.run(["xdotool", "mouseup", btn], capture_output=True, timeout=2, env=env)
+    r = subprocess.run(["xdotool", "mouseup", "--clearmodifiers", btn], capture_output=True, timeout=2, env=env)
     return "ok" if r.returncode == 0 else f"error: mouseup failed"
 
 
@@ -158,7 +163,7 @@ def execute_action(name: str, args: dict, display: str) -> str:
                     if i < clicks - 1:
                         time.sleep(humanize.click_dwell_s() + 0.02)
                 return "ok"
-            return _xdotool(["click", "--repeat", str(clicks), btn], display)
+            return _xdotool(["click", "--clearmodifiers", "--repeat", str(clicks), btn], display)
         return _humanized_click(btn, display)
 
     if name == "double_click":
@@ -170,7 +175,7 @@ def execute_action(name: str, args: dict, display: str) -> str:
             _humanized_click("1", display)
             time.sleep(humanize.click_dwell_s() + 0.02)
             return _humanized_click("1", display)
-        return _xdotool(["click", "--repeat", "2", "1"], display)
+        return _xdotool(["click", "--clearmodifiers", "--repeat", "2", "1"], display)
 
     if name == "type_text":
         text = args.get("text", "")
@@ -186,7 +191,7 @@ def execute_action(name: str, args: dict, display: str) -> str:
         amount = max(1, int(args.get("amount", 3)))
         btn = _SCROLL_BUTTON.get(direction, "5")
         _smooth_mousemove(x, y, display)
-        return _xdotool(["click", "--repeat", str(amount), btn], display)
+        return _xdotool(["click", "--clearmodifiers", "--repeat", str(amount), btn], display)
 
     if name == "drag":
         x1, y1 = int(args["start_x"]), int(args["start_y"])

@@ -24,6 +24,107 @@ log = logging.getLogger(__name__)
 
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
+# External cancellation registry — keyed by session_id (short) and also by task_id.
+# Populated when a supervisor run starts, checked at the top of each turn.
+# An external HTTP call (e.g. /gui_agent/cancel) sets the event, causing the loop
+# to exit with status="cancelled" instead of running to timeout.
+_cancel_events: dict[str, asyncio.Event] = {}
+
+
+def register_cancel_event(session_id: str, task_id: str | None = None) -> asyncio.Event:
+    """Register a cancel event for this session. Called by provider.run() at startup."""
+    ev = asyncio.Event()
+    _cancel_events[session_id] = ev
+    if task_id:
+        _cancel_events[f"task:{task_id}"] = ev
+    return ev
+
+
+def unregister_cancel_event(session_id: str, task_id: str | None = None) -> None:
+    """Clean up after supervisor run exits (success, partial, failed, cancelled)."""
+    _cancel_events.pop(session_id, None)
+    if task_id:
+        _cancel_events.pop(f"task:{task_id}", None)
+
+
+def cancel_session(session_id_or_task: str) -> bool:
+    """Set the cancel flag for a session or task. Returns True if anything matched."""
+    hit = False
+    ev = _cancel_events.get(session_id_or_task) or _cancel_events.get(f"task:{session_id_or_task}")
+    if ev:
+        ev.set()
+        hit = True
+    return hit
+
+
+def cancel_all() -> int:
+    """Cancel every active session. Returns count."""
+    n = 0
+    for ev in list(_cancel_events.values()):
+        if not ev.is_set():
+            ev.set()
+            n += 1
+    return n
+_GOOGLE_AI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
+
+
+def _resolve_backend(model: str | None = None) -> tuple[str, str, str, str]:
+    """Pick which backend to use for Gemini-family supervisor calls.
+
+    Returns (base_url, api_key, backend_name, call_model). The caller should pass
+    `call_model` in the request body — it may be prefix-stripped for Google AI Studio.
+
+    Routing rules:
+      - ACU_GEMINI_BACKEND=google_ai → force Google AI Studio (requires GEMINI_API_KEY)
+      - ACU_GEMINI_BACKEND=openrouter → force OpenRouter
+      - ACU_GEMINI_BACKEND=auto (default) → Google AI Studio if GEMINI_API_KEY is set, else OpenRouter
+    Non-Gemini models always go through OpenRouter regardless of this setting.
+    """
+    if model is None:
+        model = config.OPENROUTER_LIVE_MODEL
+    backend = (config.GEMINI_BACKEND or "auto").lower()
+    is_gemini = "gemini" in model.lower() or model.startswith("google/")
+
+    use_google_ai = False
+    if is_gemini:
+        if backend == "google_ai":
+            if not config.GEMINI_API_KEY:
+                log.warning("GEMINI_BACKEND=google_ai but GEMINI_API_KEY is empty; falling back to OpenRouter")
+            else:
+                use_google_ai = True
+        elif backend == "auto" and config.GEMINI_API_KEY:
+            use_google_ai = True
+
+    if use_google_ai:
+        call_model = model[len("google/"):] if model.startswith("google/") else model
+        return (_GOOGLE_AI_BASE, config.GEMINI_API_KEY, "google_ai", call_model)
+    return (_OPENROUTER_BASE, config.OPENROUTER_API_KEY or "", "openrouter", model)
+
+
+def _tools_with_thought(tools: list) -> list:
+    """Return a copy of `tools` with a required `thought` string param added to every tool.
+
+    Used when ACU_MERGE_REASONING is on — the supervisor writes its 1-3 sentence reasoning
+    as part of the tool arguments, letting us drop the separate thinking API call.
+    """
+    import copy
+    out = []
+    for t in tools:
+        t2 = copy.deepcopy(t)
+        fn = t2.get("function", {})
+        params = fn.setdefault("parameters", {"type": "object", "properties": {}, "required": []})
+        props = params.setdefault("properties", {})
+        props["thought"] = {
+            "type": "string",
+            "description": "What you see on screen, current state vs goal, and why you're picking this tool. 1-3 sentences. Required.",
+        }
+        req = params.setdefault("required", [])
+        if "thought" not in req:
+            req.append("thought")
+        out.append(t2)
+    return out
+
+
 # Seconds to wait after each GUI action before capturing the next screenshot.
 _SETTLE = {
     "move_to":      0.05,   # smooth animation already ~180ms + refinement
@@ -93,13 +194,50 @@ The grounding model finds elements by your description, so be specific:
 - If an element is cut off at the screen edge, scroll it into view before clicking.
 - If you can't reach an element after 3 attempts, try a completely different path to the goal.
 
-## Completion
+## Completion — four terminal tools
 
-When finishing, your summary is the ONLY information the caller gets. They don't see your screenshots or reasoning. Be specific:
+When you finish (or run out of time), you must call exactly one terminal tool. Your summary is the ONLY information the caller gets — they don't see your screenshots or reasoning. Pick the tool that matches your actual state, and be specific in the summary.
 
-- **done(success=true, summary="...")** — describe what was accomplished and what the screen shows now.
-- **done(success=false, summary="...")** — describe what you tried, why it failed, and what the screen currently shows. The caller needs this to decide whether to retry differently, fix something via CLI, or escalate. Bad: "Could not complete task." Good: "Clicked the Submit button 3 times but a 'Session expired' dialog keeps appearing. The page shows a login form. The caller may need to re-authenticate."
-- **escalate(reason="...")** — for login walls, CAPTCHAs, 2FA, or anything outside your capability. Describe exactly what you see so the caller can tell the user what to do.
+**done(summary)** — the task was fully accomplished.
+- Describe what was done and what the screen shows now.
+- This is the only terminal tool that triggers independent verification. Do NOT call it for partial work.
+- Example: `done(summary="Connection request sent to Ben Stein. Screen shows 'Pending' state next to his name in the People section.")`
+
+**partial(summary, remaining)** — real progress was made but the task is not done.
+- Use this whenever progress exists but the task is not complete — whether because you've realized mid-run that you won't finish, or because you're called into the forced wrap-up turn after the budget ran out.
+- `summary` describes what you completed and the current screen state.
+- `remaining` describes exactly what's left so the caller can continue from here.
+- This SKIPS the verifier — the caller will issue a follow-up instruction that picks up from where you left off.
+- Example: `partial(summary="Sent connection requests to Ben Stein and Per Nielsen. Currently on LinkedIn home feed.", remaining="Still need: Ben Zhou, Lin Sun, Ali Zamiri, Ehab Gouda, Shawn Shen, Pradeep Dwarakanath.")`
+
+**failed(summary, tried)** — genuinely blocked by a specific issue, not just slow.
+- Use this when the same problem recurs (element unreachable, click not registering, recurring error dialog, wrong app state you can't escape).
+- `summary` names the specific blocker and the current screen state.
+- `tried` is a short list of approaches you attempted.
+- Example: `failed(summary="'Send without a note' button in the invitation modal does not respond to clicks. Modal is still open on screen.", tried=["Clicked button 3 times at different cursor offsets", "Pressed Enter to submit", "Pressed Escape then re-opened"])`
+
+**escalate(reason)** — login walls, CAPTCHAs, 2FA, or anything outside your capability.
+- Describe exactly what you see so the caller can tell the user what to do.
+
+### Decision guide
+- Task fully done → **done**
+- Progress made, work remains → **partial** (with `remaining`)
+- Stuck on a specific blocker → **failed** (with `tried`)
+- Needs a human → **escalate**
+
+## If the budget runs out
+
+You have a fixed time budget. If you are still working when it runs out, you will be interrupted and asked a **single forced wrap-up question** with a fresh screenshot:
+
+> *"Your time ran out. Based on this screenshot and what you've done, call one of: done / partial / failed / escalate."*
+
+On that final turn, you must pick the right terminal tool based on reality:
+- If the task visibly succeeded on screen → **done**
+- If progress was made but work remains → **partial** (with `remaining`)
+- If you were genuinely stuck on a specific issue → **failed** (with `tried`)
+- If a human is needed → **escalate**
+
+You cannot call any other tools on the wrap-up turn. Do not ignore the fresh screenshot — it shows the actual final state.
 
 ## Thinking
 
@@ -241,14 +379,43 @@ _TOOLS = [
         "type": "function",
         "function": {
             "name": "done",
-            "description": "Task complete.",
+            "description": "Task FULLY complete. Triggers independent verification. Do NOT call for partial work — use 'partial' instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "description": "What was accomplished"},
-                    "success": {"type": "boolean"},
+                    "summary": {"type": "string", "description": "What was accomplished and what the screen shows now. Be specific."},
                 },
-                "required": ["summary", "success"],
+                "required": ["summary"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "partial",
+            "description": "Real progress was made but work remains. Skips verification — caller will continue with a follow-up invocation. Use this on the forced wrap-up turn when progress exists but the task isn't done.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string", "description": "What you completed and current screen state."},
+                    "remaining": {"type": "string", "description": "Exactly what's left so the caller can continue from here."},
+                },
+                "required": ["summary", "remaining"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "failed",
+            "description": "Genuinely blocked by a specific issue (element unreachable, click not registering, recurring error, wrong app state). Not for time-pressure — use 'partial' for that.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string", "description": "Name the specific blocker and current screen state."},
+                    "tried": {"type": "array", "items": {"type": "string"}, "description": "Short list of approaches attempted."},
+                },
+                "required": ["summary", "tried"],
             },
         },
     },
@@ -514,7 +681,7 @@ _VERDICT_TOOL = {
 
 async def _verify_done(
     instruction: str, screenshot_b64: str, model: str, api_key: str,
-    client: httpx.AsyncClient,
+    client: httpx.AsyncClient, base_url: str = _OPENROUTER_BASE,
 ) -> dict:
     """Independent verification that a task is complete. Returns {"pass": bool, "reason": str}."""
     headers = {
@@ -526,7 +693,7 @@ async def _verify_done(
     try:
         # Step 1: Generate checklist
         resp1 = await client.post(
-            f"{_OPENROUTER_BASE}/chat/completions",
+            f"{base_url}/chat/completions",
             headers=headers,
             json={
                 "model": model,
@@ -558,7 +725,7 @@ async def _verify_done(
 
         # Step 2: Check criteria via structured tool call
         resp2 = await client.post(
-            f"{_OPENROUTER_BASE}/chat/completions",
+            f"{base_url}/chat/completions",
             headers=headers,
             json={
                 "model": model,
@@ -601,6 +768,211 @@ async def _verify_done(
         return {"pass": True, "reason": f"verifier error: {e}"}
 
 
+# ── Forced wrap-up on hard timeout ────────────────────────────────
+
+_WRAP_UP_BUDGET = 30  # seconds — bounded sub-timeout for the forced wrap-up call
+_TERMINAL_TOOL_NAMES = {"done", "partial", "failed", "escalate"}
+
+
+async def _forced_wrap_up(
+    instruction: str,
+    display: str,
+    model: str,
+    api_key: str,
+    actions_log: list,
+    session,
+    _benchmark: bool,
+    get_screenshot,
+    base_url: str = _OPENROUTER_BASE,
+) -> dict | None:
+    """One bounded LLM call to force the supervisor to pick a terminal tool after hard timeout.
+
+    Returns a status dict on success, or None if the wrap-up itself failed.
+    """
+    # Capture fresh screenshot of final state (bounded so a dead display can't hang the wrap-up)
+    shot_b64 = None
+    try:
+        async with asyncio.timeout(5):
+            if _benchmark and get_screenshot is not None:
+                shot_b64, _ = get_screenshot()
+            else:
+                shot_b64, _ = await asyncio.get_running_loop().run_in_executor(
+                    None, _capture_jpeg_b64, display, session
+                )
+    except asyncio.TimeoutError:
+        log.warning("wrap-up: screenshot capture timed out after 5s")
+    except Exception as e:
+        log.warning(f"wrap-up: screenshot failed: {e}")
+
+    wrap_system = (
+        "Your time ran out while working on a GUI task. This is your ONE chance to tell the caller "
+        "what happened. Based on the CURRENT screenshot (the actual final state) and what you did, "
+        "pick exactly ONE terminal tool:\n"
+        "  • done(summary) — only if the task visibly succeeded on screen\n"
+        "  • partial(summary, remaining) — progress was made, work remains (caller can continue)\n"
+        "  • failed(summary, tried) — you were stuck on a specific issue\n"
+        "  • escalate(reason) — a human is needed\n"
+        "You cannot call any other tool. Look at the screenshot carefully before deciding."
+    )
+    actions_tail = actions_log[-10:] if actions_log else []
+    user_text = (
+        f"Original instruction: {instruction}\n\n"
+        f"Your last {len(actions_tail)} executed actions: {actions_tail}\n\n"
+        "Look at the screenshot below — it is the actual current state of the screen. "
+        "Now call one terminal tool."
+    )
+    user_content: list[dict] = [{"type": "text", "text": user_text}]
+    if shot_b64:
+        user_content.append({
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{shot_b64}"},
+        })
+
+    messages = [
+        {"role": "system", "content": wrap_system},
+        {"role": "user", "content": user_content},
+    ]
+    terminal_tools = [t for t in _TOOLS if t["function"]["name"] in _TERMINAL_TOOL_NAMES]
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_WRAP_UP_BUDGET)) as client:
+            async with asyncio.timeout(_WRAP_UP_BUDGET):
+                resp = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json",
+                        "HTTP-Referer": "https://github.com/openclaw/detm",
+                        "X-Title": "DETM gui_agent wrap-up",
+                    },
+                    json={
+                        "model": model,
+                        "messages": messages,
+                        "tools": terminal_tools,
+                        "tool_choice": "required",
+                        "max_tokens": 500,
+                    },
+                )
+        if resp.status_code != 200:
+            log.warning(f"wrap-up: HTTP {resp.status_code}: {resp.text[:200]}")
+            return None
+        data = resp.json()
+        msg = data["choices"][0]["message"]
+        tool_calls = msg.get("tool_calls") or []
+        if not tool_calls:
+            log.warning("wrap-up: no tool call in response")
+            return None
+        tc = tool_calls[0]
+        fn_name = tc["function"]["name"]
+        try:
+            fn_args = json.loads(tc["function"]["arguments"])
+        except Exception:
+            log.warning(f"wrap-up: could not parse tool args: {tc['function']['arguments'][:200]}")
+            return None
+
+        if fn_name == "done":
+            return {"status": "complete", "success": True, "summary": str(fn_args.get("summary", ""))}
+        if fn_name == "partial":
+            return {
+                "status": "partial", "success": True,
+                "summary": str(fn_args.get("summary", "")),
+                "remaining": str(fn_args.get("remaining", "")),
+            }
+        if fn_name == "failed":
+            tried_raw = fn_args.get("tried", [])
+            if isinstance(tried_raw, list):
+                tried = [str(x) for x in tried_raw]
+            elif tried_raw:
+                tried = [str(tried_raw)]
+            else:
+                tried = []
+            return {
+                "status": "failed", "success": False,
+                "summary": str(fn_args.get("summary", "")),
+                "tried": tried,
+            }
+        if fn_name == "escalate":
+            reason = str(fn_args.get("reason", ""))
+            return {
+                "status": "escalated", "success": False,
+                "escalated": True, "escalation_reason": reason,
+                "summary": f"Escalated: {reason}",
+            }
+        log.warning(f"wrap-up: unexpected tool call {fn_name}")
+        return None
+    except asyncio.TimeoutError:
+        log.warning(f"wrap-up: LLM call timed out after {_WRAP_UP_BUDGET}s")
+        return None
+    except Exception as e:
+        log.warning(f"wrap-up: unexpected error: {e}")
+        return None
+
+
+async def _finalize_with_wrap_up(
+    *,
+    exit_reason: str,
+    fallback_status: str,
+    fallback_summary: str,
+    error: str,
+    instruction: str,
+    display: str,
+    model: str,
+    api_key: str,
+    actions_log: list,
+    actions_taken: int,
+    session,
+    t_start: float,
+    sid: str,
+    _benchmark: bool,
+    get_screenshot,
+    _time,
+    base_url: str = _OPENROUTER_BASE,
+) -> dict:
+    """Common exit path for non-terminal run endings (hard timeout, max turns, format error).
+
+    Tries the forced wrap-up first; if that fails, returns the action-log fallback.
+    """
+    wrap = await _forced_wrap_up(
+        instruction=instruction, display=display, model=model, api_key=api_key,
+        actions_log=actions_log, session=session,
+        _benchmark=_benchmark, get_screenshot=get_screenshot,
+        base_url=base_url,
+    )
+
+    if wrap is not None:
+        _dbg.log("LIVE", f"[{sid}] wrap-up ({exit_reason}): status={wrap['status']} -- {wrap.get('summary','')[:80]}")
+        if session:
+            session.record_done(wrap.get("success", False), f"WRAP-UP ({wrap['status']}, {exit_reason}): {wrap.get('summary','')}")
+        return {
+            **wrap,
+            "escalated": wrap.get("escalated", False),
+            "escalation_reason": wrap.get("escalation_reason", ""),
+            "actions_taken": actions_taken,
+            "actions_log": actions_log[-10:],
+            "session_id": session.id if session else "",
+            "elapsed_s": round(_time.time() - t_start, 1),
+            "error": f"{error} (supervisor wrapped up)",
+        }
+
+    _dbg.log("LIVE", f"[{sid}] wrap-up ({exit_reason}) failed, using action-log fallback")
+    tail = actions_log[-5:] if actions_log else []
+    summary = (
+        f"{fallback_summary} Forced wrap-up call also failed. "
+        f"Last {len(tail)} actions: {tail}. "
+        "Actual task state is UNKNOWN — caller should desktop_look to verify before retrying."
+    )
+    return {
+        "success": False,
+        "status": fallback_status,
+        "summary": summary,
+        "error": f"{error} (wrap-up also failed)",
+        "actions_taken": actions_taken,
+        "actions_log": actions_log[-10:],
+        "session_id": session.id if session else "",
+        "elapsed_s": round(_time.time() - t_start, 1),
+    }
+
+
 # ── Main provider ───────────────────────────────────────────────
 
 class OpenRouterVLMProvider(LiveUIProvider):
@@ -623,17 +995,27 @@ class OpenRouterVLMProvider(LiveUIProvider):
         execute_override=None,       # (name: str, args: dict) -> str
         display_size_override=None,  # (width, height)
     ) -> dict:
-        api_key = config.OPENROUTER_API_KEY
-        if not api_key:
-            return {"error": "OPENROUTER_API_KEY not set", "success": False, "actions_taken": 0}
-
         self._done_verified = False
         _benchmark = get_screenshot is not None
         _do_execute = execute_override or (lambda name, args: execute_action(name, args, display))
 
-        model = config.OPENROUTER_LIVE_MODEL
+        # Register an asyncio.Event so an external HTTP call (/gui_agent/cancel) can signal
+        # this run to stop gracefully at the next turn boundary.
+        _cancel_event = register_cancel_event(session.id if session else "no-session", task_id)
+
+        base_url, api_key, backend_name, model = _resolve_backend(config.OPENROUTER_LIVE_MODEL)
+        if not api_key:
+            missing = "GEMINI_API_KEY" if backend_name == "google_ai" else "OPENROUTER_API_KEY"
+            return {
+                "error": f"{missing} not set",
+                "status": "error",
+                "summary": f"GUI agent cannot run: {missing} is not configured.",
+                "success": False,
+                "actions_taken": 0,
+            }
         disp_w, disp_h = display_size_override or _get_display_size(display)
         sid = session.id[:8] if session else "--------"
+        _dbg.log("LIVE", f"[{sid}] backend={backend_name} model={model} base={base_url}")
 
         system_text = _SYSTEM_PROMPT
         if context:
@@ -675,7 +1057,7 @@ class OpenRouterVLMProvider(LiveUIProvider):
             err = f"Failed to capture screenshot from display {display}. Is the display running?"
             _dbg.log("LIVE", f"[{sid}] {err}")
             return {
-                "error": err, "success": False, "summary": err,
+                "error": err, "status": "error", "success": False, "summary": err,
                 "actions_taken": 0, "actions_log": [],
                 "session_id": session.id if session else "",
                 "elapsed_s": round(_time.time() - t_start, 1),
@@ -701,6 +1083,23 @@ class OpenRouterVLMProvider(LiveUIProvider):
                         turn_no = action_turns + format_retries + 1
                         _dbg.log("LIVE", f"[{sid}] turn={turn_no} actions={action_turns} retries={format_retries}")
 
+                        # External cancellation check — fires if /gui_agent/cancel was called
+                        if _cancel_event.is_set():
+                            _dbg.log("LIVE", f"[{sid}] cancelled externally at turn {turn_no}")
+                            if session:
+                                session.record_error("cancelled externally")
+                            if last_usage_data:
+                                _record_usage(model, task_id, last_usage_data)
+                            return {
+                                "success": False,
+                                "status": "cancelled",
+                                "summary": f"Cancelled externally at turn {turn_no}, actions={actions_taken}",
+                                "actions_taken": actions_taken,
+                                "actions_log": actions_log[-10:],
+                                "session_id": session.id if session else "",
+                                "elapsed_s": round(_time.time() - t_start, 1),
+                            }
+
                         # Context management: sliding window + strip old images
                         if len(messages) > CONTEXT_WINDOW + 2:
                             messages = messages[:2] + messages[-CONTEXT_WINDOW:]
@@ -710,44 +1109,49 @@ class OpenRouterVLMProvider(LiveUIProvider):
                             if isinstance(m.get("content"), list):
                                 m["content"] = [c for c in m["content"] if c.get("type") != "image_url"]
 
-                        # ── Pass 1: Thinking (text-only, no tools) ──
-                        think_messages = messages + [
-                            {"role": "user", "content": (
-                                "Before acting, think step by step:\n"
-                                "1. What do you see on screen right now?\n"
-                                "2. What is the current state relative to the task goal?\n"
-                                "3. What specific action should you take next and why?\n"
-                                "Be concise (2-4 sentences)."
-                            )},
-                        ]
-                        think_resp = await client.post(
-                            f"{_OPENROUTER_BASE}/chat/completions",
-                            headers={
-                                "Authorization": f"Bearer {api_key}",
-                                "Content-Type": "application/json",
-                                "HTTP-Referer": "https://github.com/openclaw/detm",
-                                "X-Title": "DETM gui_agent",
-                            },
-                            json={
-                                "model": model,
-                                "messages": think_messages,
-                                "max_tokens": 300,
-                            },
-                        )
                         thinking = ""
-                        if think_resp.status_code == 200:
-                            think_data = think_resp.json()
-                            thinking = (think_data["choices"][0]["message"].get("content") or "").strip()
-                            if thinking:
-                                _dbg.log("LIVE", f"[{sid}] thinking: {thinking[:200]}")
+                        if not config.MERGE_REASONING:
+                            # ── Pass 1: Thinking (text-only, no tools) ──
+                            think_messages = messages + [
+                                {"role": "user", "content": (
+                                    "Before acting, think step by step:\n"
+                                    "1. What do you see on screen right now?\n"
+                                    "2. What is the current state relative to the task goal?\n"
+                                    "3. What specific action should you take next and why?\n"
+                                    "Be concise (2-4 sentences)."
+                                )},
+                            ]
+                            think_resp = await client.post(
+                                f"{base_url}/chat/completions",
+                                headers={
+                                    "Authorization": f"Bearer {api_key}",
+                                    "Content-Type": "application/json",
+                                    "HTTP-Referer": "https://github.com/openclaw/detm",
+                                    "X-Title": "DETM gui_agent",
+                                },
+                                json={
+                                    "model": model,
+                                    "messages": think_messages,
+                                    "max_tokens": 300,
+                                },
+                            )
+                            if think_resp.status_code == 200:
+                                think_data = think_resp.json()
+                                thinking = (think_data["choices"][0]["message"].get("content") or "").strip()
+                                if thinking:
+                                    _dbg.log("LIVE", f"[{sid}] thinking: {thinking[:200]}")
 
-                        # ── Pass 2: Action (with tools, thinking as assistant message) ──
+                        # ── Pass 2: Action (with tools, thinking as assistant message if present) ──
                         action_messages = list(messages)
                         if thinking:
                             action_messages.append({"role": "assistant", "content": thinking})
 
+                        # When merging: tools have a required `thought` param so reasoning rides
+                        # inside the tool call itself. Only one API call per turn.
+                        tools_for_call = _tools_with_thought(_TOOLS) if config.MERGE_REASONING else _TOOLS
+
                         resp = await client.post(
-                            f"{_OPENROUTER_BASE}/chat/completions",
+                            f"{base_url}/chat/completions",
                             headers={
                                 "Authorization": f"Bearer {api_key}",
                                 "Content-Type": "application/json",
@@ -757,32 +1161,61 @@ class OpenRouterVLMProvider(LiveUIProvider):
                             json={
                                 "model": model,
                                 "messages": action_messages,
-                                "tools": _TOOLS,
+                                "tools": tools_for_call,
                                 "tool_choice": "auto",
-                                "max_tokens": 1000,
+                                # 1000 was too tight when MERGE_REASONING is on — the model writes
+                                # its reasoning as content AND in the tool's `thought` arg, and can
+                                # blow past the cap mid-tool-call → finish_reason=length → no tool
+                                # call → format retry → HTTP 400 loop. 5000 gives plenty of headroom
+                                # for long chains of "wait, let me reconsider" without truncation.
+                                "max_tokens": 5000,
                             },
                         )
 
                         t_api = asyncio.get_running_loop().time()
                         api_ms = (t_api - t0) * 1000
+                        # Detect truncation: if the model ran out of tokens mid-response, the
+                        # content is a partial sentence and tool_calls are likely missing. Log it
+                        # so the format_retry loop can skip the retry (retrying the same messages
+                        # produces the same truncation).
                         if resp.status_code != 200:
-                            err = f"OpenRouter HTTP {resp.status_code}: {resp.text[:300]}"
+                            err = f"API HTTP {resp.status_code}: {resp.text[:300]}"
                             _dbg.log("LIVE", f"[{sid}] API error: {err}")
                             if session:
                                 session.record_error(err)
-                            return {"error": err, "summary": f"GUI agent API error: {err[:200]}", "success": False, "actions_taken": actions_taken, "actions_log": actions_log[-10:]}
+                            return {"error": err, "status": "error", "summary": f"GUI agent API error: {err[:200]}", "success": False, "actions_taken": actions_taken, "actions_log": actions_log[-10:]}
 
                         data = resp.json()
                         last_usage_data = data
                         _dbg.log("LIVE", f"[{sid}] raw_response: {json.dumps(data)[:2000]}")
+                        _usage = data.get("usage", {}) or {}
+                        _ptd = _usage.get("prompt_tokens_details", {}) or {}
+                        _dbg.log(
+                            "LIVE",
+                            f"[{sid}] cache: prompt={_usage.get('prompt_tokens', 0)} "
+                            f"cached={_ptd.get('cached_tokens', 0)} "
+                            f"write={_ptd.get('cache_write_tokens', 0)}",
+                        )
                         choice = data["choices"][0]
                         msg = choice["message"]
                         tool_calls = msg.get("tool_calls") or []
 
                         if not tool_calls:
-                            _dbg.log("LIVE", f"[{sid}] no tool call ({api_ms:.0f}ms)")
-                            messages.append({"role": "assistant", "content": _extract_model_text(msg) or ""})
-                            messages.append({"role": "user", "content": "Call a tool."})
+                            finish_reason = choice.get("finish_reason", "")
+                            _dbg.log("LIVE", f"[{sid}] no tool call ({api_ms:.0f}ms) finish={finish_reason}")
+                            # If the model got truncated (finish_reason=length), the content is a
+                            # half-sentence of rambling reasoning. Do NOT add it to the message
+                            # history — that would confuse the retry and often causes HTTP 400.
+                            # Instead, tell the model to be brief and produce a tool call.
+                            if finish_reason == "length":
+                                messages.append({"role": "user", "content": (
+                                    "Your previous response was truncated (too much reasoning text). "
+                                    "Produce a tool call IMMEDIATELY with a brief thought (≤2 sentences). "
+                                    "No extended planning, no 'wait, let me reconsider'."
+                                )})
+                            else:
+                                messages.append({"role": "assistant", "content": _extract_model_text(msg) or ""})
+                                messages.append({"role": "user", "content": "Call a tool."})
                             format_retries += 1
                             continue
 
@@ -806,9 +1239,10 @@ class OpenRouterVLMProvider(LiveUIProvider):
                             continue
                         tc_id = tc["id"]
 
-                        # Pop thought if model still sends it (backward compat), use narration as primary
-                        fn_args.pop("thought", None)
-                        thought = (narration or "").strip()
+                        # Extract thought from tool args (merged mode) or use narration (two-pass mode).
+                        # Pop thought out so it isn't passed to execute_action.
+                        tool_thought = fn_args.pop("thought", None)
+                        thought = (tool_thought or narration or "").strip()
                         if thought:
                             _dbg.log("LIVE", f"[{sid}] thought: {thought[:120]}")
                         if session and thought:
@@ -820,11 +1254,10 @@ class OpenRouterVLMProvider(LiveUIProvider):
 
                         # ── Terminal actions ─────────────────────────────
                         if fn_name == "done":
-                            success = bool(fn_args.get("success", True))
                             summary = str(fn_args.get("summary", ""))
 
-                            # Independent verification on success claims
-                            if success and not getattr(self, "_done_verified", False):
+                            # Independent verification: done always claims full completion
+                            if not getattr(self, "_done_verified", False):
                                 self._done_verified = True
                                 # Capture fresh screenshot for verification
                                 if _benchmark:
@@ -835,7 +1268,7 @@ class OpenRouterVLMProvider(LiveUIProvider):
                                     )
                                 if verify_b64:
                                     verdict = await _verify_done(
-                                        instruction, verify_b64, model, api_key, client
+                                        instruction, verify_b64, model, api_key, client, base_url
                                     )
                                     if verdict["pass"]:
                                         _dbg.log("LIVE", f"[{sid}] verification PASSED: {verdict.get('reason', '')[:120]}")
@@ -845,18 +1278,67 @@ class OpenRouterVLMProvider(LiveUIProvider):
                                         messages.append({"role": "tool", "tool_call_id": tc_id,
                                             "content": f"Verification FAILED. The task is NOT complete. "
                                                        f"Issue: {verdict.get('reason', 'unknown')}. "
-                                                       f"Continue working to fix this."})
+                                                       f"Continue working, or call partial() if you are out of time."})
                                         continue
 
                             self._done_verified = False
                             if session:
-                                session.record_done(success, summary)
+                                session.record_done(True, summary)
                             messages.append({"role": "tool", "tool_call_id": tc_id, "content": "ok"})
-                            _dbg.log("LIVE", f"[{sid}] done: success={success} actions={actions_taken} -- {summary[:80]}")
+                            _dbg.log("LIVE", f"[{sid}] done: actions={actions_taken} -- {summary[:80]}")
                             _record_usage(model, task_id, data)
                             return {
-                                "success": success,
+                                "success": True,
+                                "status": "complete",
                                 "summary": summary,
+                                "escalated": False,
+                                "escalation_reason": "",
+                                "actions_taken": actions_taken,
+                                "actions_log": actions_log[-10:],
+                                "session_id": session.id if session else "",
+                                "elapsed_s": round(_time.time() - t_start, 1),
+                            }
+
+                        if fn_name == "partial":
+                            summary = str(fn_args.get("summary", ""))
+                            remaining = str(fn_args.get("remaining", ""))
+                            if session:
+                                session.record_done(True, f"PARTIAL: {summary} | remaining: {remaining}")
+                            messages.append({"role": "tool", "tool_call_id": tc_id, "content": "ok"})
+                            _dbg.log("LIVE", f"[{sid}] partial: actions={actions_taken} -- {summary[:80]} | remaining: {remaining[:80]}")
+                            _record_usage(model, task_id, data)
+                            return {
+                                "success": True,
+                                "status": "partial",
+                                "summary": summary,
+                                "remaining": remaining,
+                                "escalated": False,
+                                "escalation_reason": "",
+                                "actions_taken": actions_taken,
+                                "actions_log": actions_log[-10:],
+                                "session_id": session.id if session else "",
+                                "elapsed_s": round(_time.time() - t_start, 1),
+                            }
+
+                        if fn_name == "failed":
+                            summary = str(fn_args.get("summary", ""))
+                            tried_raw = fn_args.get("tried", [])
+                            if isinstance(tried_raw, str):
+                                tried = [tried_raw]
+                            elif isinstance(tried_raw, list):
+                                tried = [str(x) for x in tried_raw]
+                            else:
+                                tried = []
+                            if session:
+                                session.record_done(False, f"FAILED: {summary} | tried: {'; '.join(tried)}")
+                            messages.append({"role": "tool", "tool_call_id": tc_id, "content": "ok"})
+                            _dbg.log("LIVE", f"[{sid}] failed: actions={actions_taken} -- {summary[:80]} | tried: {tried}")
+                            _record_usage(model, task_id, data)
+                            return {
+                                "success": False,
+                                "status": "failed",
+                                "summary": summary,
+                                "tried": tried,
                                 "escalated": False,
                                 "escalation_reason": "",
                                 "actions_taken": actions_taken,
@@ -874,6 +1356,7 @@ class OpenRouterVLMProvider(LiveUIProvider):
                             _record_usage(model, task_id, data)
                             return {
                                 "success": False,
+                                "status": "escalated",
                                 "escalated": True,
                                 "escalation_reason": reason,
                                 "summary": f"Escalated: {reason}",
@@ -1074,43 +1557,49 @@ class OpenRouterVLMProvider(LiveUIProvider):
                             session.record_error("max format retries")
                         if last_usage_data:
                             _record_usage(model, task_id, last_usage_data)
-                        return {
-                            "success": False,
-                            "summary": "Model failed to produce tool calls",
-                            "error": "max format retries",
-                            "actions_taken": actions_taken,
-                            "actions_log": actions_log[-10:],
-                            "session_id": session.id if session else "",
-                            "elapsed_s": round(_time.time() - t_start, 1),
-                        }
+                        return await _finalize_with_wrap_up(
+                            exit_reason="format_error",
+                            fallback_status="format_error",
+                            fallback_summary="Model failed to produce tool calls — supervisor is in a broken state.",
+                            error=f"max format retries ({MAX_FORMAT_RETRIES})",
+                            instruction=instruction, display=display, model=model, api_key=api_key,
+                            actions_log=actions_log, actions_taken=actions_taken, session=session,
+                            t_start=t_start, sid=sid,
+                            _benchmark=_benchmark, get_screenshot=get_screenshot, _time=_time, base_url=base_url,
+                        )
 
                     _dbg.log("LIVE", f"[{sid}] max turns ({MAX_TURNS}) -- actions={actions_taken}")
                     if last_usage_data:
                         _record_usage(model, task_id, last_usage_data)
-                    return {
-                        "success": False,
-                        "summary": f"Reached max {MAX_TURNS} turns without completion",
-                        "actions_taken": actions_taken,
-                        "actions_log": actions_log[-10:],
-                        "session_id": session.id if session else "",
-                        "elapsed_s": round(_time.time() - t_start, 1),
-                    }
+                    return await _finalize_with_wrap_up(
+                        exit_reason="max_turns",
+                        fallback_status="max_turns",
+                        fallback_summary=(
+                            f"Reached max {MAX_TURNS} turns without the supervisor calling a terminal tool."
+                        ),
+                        error=f"max turns ({MAX_TURNS})",
+                        instruction=instruction, display=display, model=model, api_key=api_key,
+                        actions_log=actions_log, actions_taken=actions_taken, session=session,
+                        t_start=t_start, sid=sid,
+                        _benchmark=_benchmark, get_screenshot=get_screenshot, _time=_time, base_url=base_url,
+                    )
 
             except asyncio.TimeoutError:
-                _dbg.log("LIVE", f"[{sid}] timeout {timeout}s -- actions={actions_taken}")
+                _dbg.log("LIVE", f"[{sid}] hard timeout {timeout}s -- forcing supervisor wrap-up")
                 if session:
-                    session.record_error(f"timeout after {timeout}s")
+                    session.record_error(f"hard timeout at {timeout}s, attempting forced wrap-up")
                 if last_usage_data:
                     _record_usage(model, task_id, last_usage_data)
-                return {
-                    "success": False,
-                    "summary": f"Timed out after {timeout}s",
-                    "error": f"timeout after {timeout}s",
-                    "actions_taken": actions_taken,
-                    "actions_log": actions_log[-10:],
-                    "session_id": session.id if session else "",
-                    "elapsed_s": round(_time.time() - t_start, 1),
-                }
+                return await _finalize_with_wrap_up(
+                    exit_reason="timeout",
+                    fallback_status="timeout",
+                    fallback_summary=f"Hard timeout at {timeout}s.",
+                    error=f"hard timeout after {timeout}s",
+                    instruction=instruction, display=display, model=model, api_key=api_key,
+                    actions_log=actions_log, actions_taken=actions_taken, session=session,
+                    t_start=t_start, sid=sid,
+                    _benchmark=_benchmark, get_screenshot=get_screenshot, _time=_time, base_url=base_url,
+                )
             except Exception as e:
                 _dbg.log("LIVE", f"[{sid}] exception: {e}")
                 log.error(f"gui_agent error: {e}", exc_info=True)
@@ -1118,7 +1607,19 @@ class OpenRouterVLMProvider(LiveUIProvider):
                     session.record_error(str(e))
                 if last_usage_data:
                     _record_usage(model, task_id, last_usage_data)
-                return {"error": str(e), "summary": f"GUI agent error: {str(e)[:200]}", "success": False, "actions_taken": actions_taken, "actions_log": actions_log[-10:], "session_id": session.id if session else "", "elapsed_s": round(_time.time() - t_start, 1)}
+                return {
+                    "error": str(e),
+                    "status": "error",
+                    "summary": f"GUI agent internal error: {str(e)[:200]}",
+                    "success": False,
+                    "actions_taken": actions_taken,
+                    "actions_log": actions_log[-10:],
+                    "session_id": session.id if session else "",
+                    "elapsed_s": round(_time.time() - t_start, 1),
+                }
+            finally:
+                # Clean up the cancel event registry so the dict doesn't leak entries.
+                unregister_cancel_event(session.id if session else "no-session", task_id)
 
 
 def _record_usage(model: str, task_id: str | None, data: dict) -> None:

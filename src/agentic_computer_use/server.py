@@ -200,7 +200,15 @@ TOOLS = [
             "for precise cursor placement. Handles clicks, typing, scrolling, drag-and-drop, "
             "and keyboard shortcuts. Use for any GUI interaction — from single clicks to "
             "complex multi-step workflows like form filling, navigation, or file management. "
-            "Returns when the task is complete (success/fail) or when the agent escalates."
+            "Returns a dict with a 'status' field: "
+            "'complete' (fully done), "
+            "'partial' (progress made, more work left — see 'remaining' field; reinvoke referencing current state), "
+            "'failed' (blocked by specific issue — see 'tried' field), "
+            "'escalated' (needs human), "
+            "'timeout' (hard timeout — state unknown, desktop_look first), "
+            "'busy' (another gui_agent is already running on this task — await it before retrying; do NOT fire parallel gui_agent calls on the same task), "
+            "'error' (infrastructure problem). "
+            "Always check 'status' before acting. Issue one gui_agent per task at a time — await each result before dispatching the next."
         ),
         inputSchema={
             "type": "object",
@@ -393,23 +401,53 @@ ROUTE_MAP = {
 
 # ─── Proxy handler ──────────────────────────────────────────────
 
+_DISABLED_TOOLS = {
+    name.strip().lower()
+    for name in os.environ.get("ACU_DISABLED_TOOLS", "").split(",")
+    if name.strip()
+}
+
+
 @app.list_tools()
 async def list_tools():
-    return TOOLS
+    if not _DISABLED_TOOLS:
+        return TOOLS
+    return [t for t in TOOLS if t.name.lower() not in _DISABLED_TOOLS]
 
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict):
+    if name.lower() in _DISABLED_TOOLS:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Tool '{name}' is disabled via ACU_DISABLED_TOOLS",
+            "disabled_tools": sorted(_DISABLED_TOOLS),
+        }))]
     if name not in ROUTE_MAP:
         return [TextContent(type="text", text=json.dumps({"error": f"Unknown tool: {name}"}))]
 
     method, path = ROUTE_MAP[name]
     try:
         async with httpx.AsyncClient(timeout=300.0) as client:
-            if method == "GET":
-                resp = await client.get(f"{DAEMON_URL}{path}")
-            else:
-                resp = await client.post(f"{DAEMON_URL}{path}", json=arguments)
+            try:
+                if method == "GET":
+                    resp = await client.get(f"{DAEMON_URL}{path}")
+                else:
+                    resp = await client.post(f"{DAEMON_URL}{path}", json=arguments)
+            except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout, asyncio.TimeoutError) as te:
+                # Caller-side timeout on a long-running tool (gui_agent is the usual culprit).
+                # Tell the daemon to stop the in-flight session so it doesn't wedge the event loop.
+                if name == "gui_agent":
+                    task_id = arguments.get("task_id")
+                    cancel_body = {"task_id": task_id} if task_id else {"all": True}
+                    try:
+                        async with httpx.AsyncClient(timeout=5.0) as cc:
+                            await cc.post(f"{DAEMON_URL}/gui_agent/cancel", json=cancel_body)
+                    except Exception:
+                        pass
+                return [TextContent(type="text", text=json.dumps({
+                    "error": f"Tool '{name}' timed out on MCP proxy ({type(te).__name__}).",
+                    "hint": "Daemon was asked to cancel the in-flight session. Check task status / desktop_look before retrying.",
+                }))]
 
             data = resp.json()
             if "image_b64" in data:

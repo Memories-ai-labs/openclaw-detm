@@ -6,7 +6,7 @@ Any task involving desktop apps, GUI interaction, visual monitoring, or the desk
 1. `task_register(name="...", plan=[...])` — always start with a plan
 2. `task_item_update(ordinal=0, status="active")` — activate the first item
 3. Before each action: `task_log_action(action_type=<type>, summary="About to do X", status="started")`
-4. Execute the tool (`desktop_look`, `gui_agent`, `desktop_action`, `smart_wait`, etc.)
+4. Execute the tool (`desktop_look`, `gui_agent`, `smart_wait`, etc.)
 5. After each observation: `task_update(message="I see X, therefore I will do Y")`
 6. `task_item_update(ordinal=N, status="completed")` when item is done
 7. `task_update(status="completed")` to close the task
@@ -22,7 +22,7 @@ Use `scrapped` when abandoning an approach. Use `skipped` only when intentionall
 
 **`desktop_look` returns the image directly to you** — you interpret it yourself. After calling it, always narrate what you see via `task_update(message=...)`.
 
-**`gui_agent` is the unified GUI tool** — it uses Gemini Flash for reasoning and UI-TARS for precise cursor placement. Give it a natural language instruction describing what to do. It handles clicks, typing, scrolling, navigation, and multi-step workflows autonomously. For pixel-exact control, use `desktop_action` with coordinates from `desktop_look`.
+**`gui_agent` is the unified GUI tool** — it uses Gemini Flash for reasoning and UI-TARS for precise cursor placement. Give it a natural language instruction describing what to do. It handles clicks, typing, scrolling, navigation, and multi-step workflows autonomously. It returns a dict — **always branch on the `status` field** (`complete`, `partial`, `failed`, `escalated`, `timeout`, `error`), not just `success`. See the DETM skill for the full decision tree.
 
 **`smart_wait` is for long-running visual checks** (downloads, renders, builds). Use `window:<name>` not `screen` when possible. A vision model (Gemini Flash Lite via OpenRouter by default) polls every 1s with binary YES/NO — you just get woken up when done or when the timeout fires.
 

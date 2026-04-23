@@ -41,12 +41,23 @@ build_run_cmd() {
         ACU_OPENROUTER_VISION_MODEL
         ACU_VISION_BACKEND
         ACU_GUI_AGENT_BACKEND
+        ACU_GEMINI_BACKEND
+        ACU_GEMINI_API_KEY
+        ACU_MERGE_REASONING
+        ACU_DISABLED_TOOLS
         OPENROUTER_API_KEY
         ANTHROPIC_API_KEY
+        GEMINI_API_KEY
         MAVI_API_KEY
         OLLAMA_URL
         OPENCLAW_GATEWAY_PORT
     )
+
+    # Load ~/.agentic-computer-use/.env if present (so GEMINI_API_KEY etc. are visible)
+    local env_file="${ACU_DATA_DIR:-$HOME/.agentic-computer-use}/.env"
+    if [ -f "$env_file" ]; then
+        set -a; source "$env_file"; set +a
+    fi
     local var=""
     for var in "${passthrough_vars[@]}"; do
         if [ "${!var+x}" = x ]; then

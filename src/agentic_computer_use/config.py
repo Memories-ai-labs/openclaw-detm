@@ -60,10 +60,24 @@ CLAUDE_VISION_MODEL = os.environ.get("ACU_CLAUDE_VISION_MODEL", "claude-sonnet-4
 # MAVI video intelligence API
 MAVI_API_KEY = os.environ.get("MAVI_API_KEY", "")
 
-# Live UI vision/control — OpenRouter-backed screenshot → tool → observe loop
-# google/gemini-3-flash-preview — strong agentic/tool use, good balance of speed and accuracy
-# google/gemini-3-flash-preview — stronger agentic/tool use but heavier
+# Live UI vision/control — backed by OpenRouter or Google AI Studio
+# google/gemini-3-flash-preview — strong agentic/tool use. No caching via OpenRouter (3-preview
+#   not on implicit list, and system prompt is below the 4096-token explicit-cache minimum),
+#   but Google AI Studio direct offers native caching for this model.
 OPENROUTER_LIVE_MODEL = os.environ.get("ACU_OPENROUTER_LIVE_MODEL", "google/gemini-3-flash-preview")
+
+# Gemini backend for gui_agent supervisor. When set to "google_ai" (or if GEMINI_API_KEY is set
+# and this is unset), direct Google AI Studio is used via OpenAI-compatible endpoint — bypasses
+# OpenRouter routing overhead and enables native Gemini caching. Default "auto" picks AI Studio
+# when GEMINI_API_KEY is present, otherwise falls back to OpenRouter.
+GEMINI_BACKEND = os.environ.get("ACU_GEMINI_BACKEND", "auto")  # auto|openrouter|google_ai
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "") or os.environ.get("ACU_GEMINI_API_KEY", "")
+
+# EXPERIMENTAL: merge the supervisor's thinking + action into a single API call. The model
+# populates a `thought` field in the tool arguments instead of emitting a separate thinking
+# response. Cuts ~50% of per-turn LLM calls. May degrade action quality — tool-call selection
+# happens with less deliberation. A/B test before flipping on in production.
+MERGE_REASONING = os.environ.get("ACU_MERGE_REASONING", "false").lower() in ("true", "1", "yes")
 
 # OpenClaw CLI path
 OPENCLAW_CLI = os.environ.get("ACU_OPENCLAW_CLI", "openclaw")

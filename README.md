@@ -319,7 +319,9 @@ Everything runs through OpenRouter by default — no local GPU or models needed.
 |----------|---------|-------------|
 | `OPENROUTER_API_KEY` | -- | **Required.** Used by GUI agent, Smart Wait, and grounding. Validated at install. |
 | `DISPLAY` | `:99` | X11 display |
-| `ACU_OPENROUTER_LIVE_MODEL` | `google/gemini-3-flash-preview` | GUI agent supervisor model |
+| `ACU_OPENROUTER_LIVE_MODEL` | `google/gemini-3-flash-preview` | GUI agent supervisor model. For caching, set `GEMINI_API_KEY` to route via Google AI Studio instead. |
+| `GEMINI_API_KEY` | -- | Optional. If set, supervisor calls go direct to Google AI Studio (bypasses OpenRouter, enables native Gemini caching). Get one at [aistudio.google.com](https://aistudio.google.com/apikey). |
+| `ACU_GEMINI_BACKEND` | `auto` | Which backend for Gemini models: `auto` picks AI Studio if `GEMINI_API_KEY` is set, else OpenRouter. Force with `openrouter` or `google_ai`. |
 | `ACU_UITARS_OPENROUTER_MODEL` | `bytedance/ui-tars-1.5-7b` | Grounding model (cursor placement) |
 | `ACU_OPENROUTER_VISION_MODEL` | `google/gemini-2.0-flash-lite-001` | Smart Wait vision model |
 | `ACU_VISION_BACKEND` | `openrouter` | Vision backend for Smart Wait. Change to `ollama` only if you have a local GPU. |

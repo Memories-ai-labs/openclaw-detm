@@ -22,7 +22,7 @@ You (plan, decide, talk to user)
   → gui_agent("click search bar, type hello, press Enter")
     → Supervisor (screenshot → decide action → verify)
       → UI-TARS (find element → return coordinates)
-    → Supervisor returns {success, summary, actions_log}
+    → Supervisor returns {status, success, summary, actions_log, ...}
   → You read result, take desktop_look if needed, decide next step
 ```
 
@@ -113,29 +113,41 @@ You do NOT need to log non-desktop tool calls (web_search, file reads, bash comm
 
 **3. Pass `task_id` to every desktop/GUI/wait call.**
 
-**4. Verify visually — don't assume failure.**
-`gui_agent` calls can take 30-120 seconds. If a call times out or returns an unclear result, **do NOT assume it failed.** Always take a `desktop_look` to see the actual screen state before deciding what to do next. The task often succeeded — the response just took too long to arrive.
+**4. Read the `status` field — do not guess from `success` alone.**
 
+Every `gui_agent` call returns a dict with a `status` field. Branch on it:
+
+| status | success | What it means | Your next move |
+|---|---|---|---|
+| `complete` | true | Task fully done, verified against a fresh screenshot | `desktop_look` to confirm, move to next plan item |
+| `partial` | true | **Progress was made, work remains.** Read the `remaining` field | Reinvoke `gui_agent` with an instruction that references current state + `remaining`. Use a longer `timeout` (e.g. 240s). Do NOT reissue the original instruction — the supervisor already did part of it |
+| `failed` | false | Supervisor is genuinely blocked. Read the `tried` field to see what was attempted | `desktop_look` → try a different approach (URL instead of click, keyboard shortcut, CLI fallback). Do not repeat anything in `tried` |
+| `escalated` | false | Login wall, CAPTCHA, 2FA, or other human-required block | Tell the user what to do, based on `escalation_reason`. Do not retry silently |
+| `timeout` | false | Rare — hard timeout AND the forced wrap-up call also failed. Screen state is unknown | `desktop_look` FIRST. Read `actions_log` for context. Normally when time runs out the supervisor is given one forced wrap-up turn and comes back with `partial`/`failed`/`done`/`escalated` — only if THAT call also fails do you see `timeout` |
+| `error` | false | Infrastructure problem (screenshot failed, API key missing, etc.) | Check daemon health, do not retry until fixed |
+| `max_turns` | false | Supervisor hit internal turn cap without wrapping up | `desktop_look`, treat like `timeout` |
+| `format_error` | false | Supervisor couldn't produce valid tool calls (broken model state) | `desktop_look` to see state; try again with a simpler instruction |
+| `busy` | false | Another gui_agent is already running on this task. You dispatched a second call before the first returned | Wait for the active session's result, then issue your next gui_agent using its `remaining`/`summary` as context. Do NOT fire parallel gui_agent calls on the same task — they scramble UI state |
+
+**`desktop_look` is your ground truth.** Always prefer it over inferring state from summaries — the screen shows the real state.
+
+**Continuation pattern for `status=partial`:**
 ```
-# gui_agent timed out or returned empty:
-# WRONG — blindly retry:
-gui_agent(instruction="same thing again", task_id=<id>)  # wastes time, page already loaded
+result = gui_agent(instruction="On LinkedIn, send connection requests to: Ben Stein, Per Nielsen, Ben Zhou, Lin Sun", task_id=<id>, timeout=240)
+# → {"status": "partial", "summary": "Sent to Ben Stein and Per Nielsen. Currently on LinkedIn home feed.", "remaining": "Ben Zhou, Lin Sun still pending"}
 
-# RIGHT — look first, then decide:
-desktop_look(task_id=<id>)  # see what actually happened
-# If the page loaded → continue to next step
-# If it genuinely failed → try a different approach
+# WRONG — reissuing the original instruction:
+gui_agent(instruction="On LinkedIn, send connection requests to: Ben Stein, Per Nielsen, Ben Zhou, Lin Sun", ...)  # wastes time redoing Ben Stein and Per
+
+# RIGHT — continue from current state:
+gui_agent(instruction="You previously connected Ben Stein and Per Nielsen on LinkedIn. You are on the home feed. Now send connection requests to: Ben Zhou, Lin Sun.", task_id=<id>, timeout=240)
 ```
 
-**`desktop_look` is your ground truth.** When in doubt about what happened, look at the screen. Don't reason from error messages alone — the screen shows the real state.
-
-**Retry once with a different approach before giving up.** If gui_agent fails:
-1. `desktop_look` to see the screen
-2. If the screen shows the task actually succeeded → continue
-3. If it genuinely failed → retry **once** with a different instruction (e.g. use a URL instead of clicking, try a keyboard shortcut, simplify the instruction)
-4. If the retry also fails → try solving it via CLI (`exec`) if possible, or escalate to the user
-5. **Never retry the exact same instruction** — if it failed once, the same instruction will fail again. Change your approach.
-6. **Never retry more than once** — two failures means the approach is wrong, not that it needs a third try
+**Retry once with a different approach before giving up.** If `status=failed` or `status=timeout` and `desktop_look` confirms the task did NOT succeed:
+1. Retry **once** with a different instruction (URL instead of click, keyboard shortcut, simpler scope).
+2. If the retry also fails → try CLI (`exec`) if possible, or escalate to the user.
+3. **Never repeat the exact same instruction** — if it failed, the same instruction will fail again.
+4. **Never retry more than once** — two failures means the approach is wrong.
 
 If a step genuinely fails after retrying, do NOT create a new task. Use `task_plan_append` to add corrective steps and `task_item_update(status="scrapped")` on stale items.
 
@@ -176,12 +188,13 @@ gui_agent(instruction="Click the 'Nonstop' filter checkbox in the left sidebar",
 gui_agent(instruction="Search for flights, filter nonstop, select the cheapest, and proceed to booking", task_id=<id>)
 ```
 
-**After each gui_agent call, take a `desktop_look`** to see what actually happened. The gui_agent result includes `{success, summary, actions_taken, actions_log}` — read the `actions_log` to understand what was tried, especially on failure.
+**After each gui_agent call, branch on the `status` field** — see the decision table in "Read the `status` field" above. The result dict includes `{success, status, summary, actions_taken, actions_log, ...}` plus status-specific fields (`remaining` on partial, `tried` on failed, `escalation_reason` on escalated). Read `actions_log` for a trail of the last ~10 actions, especially on failure.
 
-**When gui_agent fails:** read the `actions_log` and `summary` carefully. It tells you what the supervisor tried and why it gave up. Use that to decide:
-- Retry with a different instruction (e.g. keyboard shortcut instead of clicking)
-- Fix the underlying problem via CLI (restart browser, navigate via URL bar)
-- Take a `desktop_look` to see the current state and replan
+**When `status` is `partial`**: the supervisor made progress and ran out of budget. Reinvoke with an instruction referencing current state — see the continuation pattern in the decision section. Do not reissue the original instruction.
+
+**When `status` is `failed`**: read `summary` + `tried`. Retry once with an approach NOT in `tried`, or fix the underlying problem via CLI and send gui_agent back in.
+
+**When `status` is `timeout`**: screen state is unknown. `desktop_look` first, then decide.
 
 **gui_agent cannot access CLI, files, or web search.** If the problem requires anything outside the GUI (checking a URL, clearing cache, restarting an app), you must do it yourself, then send gui_agent back in.
 
@@ -231,7 +244,7 @@ If reality diverges from the plan, use `task_item_update(status="scrapped")` + `
 - `wait_status` / `wait_update` / `wait_cancel`
 
 ### GUI Agent
-- `gui_agent` — autonomous GUI agent (Gemini Flash + UI-TARS). Handles clicks, typing, scrolling, navigation, form filling. Returns `{success, summary, escalated, actions_taken}`.
+- `gui_agent` — autonomous GUI agent (Gemini Flash + UI-TARS). Handles clicks, typing, scrolling, navigation, form filling. Returns `{status, success, summary, actions_taken, actions_log, …}` — branch on `status` (see "Read the `status` field" above).
 
 ### Desktop
 - `desktop_look` — screenshot returned as image (you interpret it)

@@ -1100,13 +1100,35 @@ async def handle_gui_agent(request: web.Request) -> web.Response:
     if not instruction:
         return web.json_response({"error": "instruction is required"}, status=400)
 
-    timeout = min(int(args.get("timeout", 180)), 300)
+    # Cap gui_agent budget at 240s so we always finish BEFORE OpenClaw's MCP call timeout
+    # (~300s) fires and the caller stops listening. Exceeding this caused today's
+    # "main LLM reports paused/failed while daemon is still successfully running" bug.
+    timeout = min(int(args.get("timeout", 180)), 240)
     context = args.get("context", "")
     display = await _resolve_task_display(task_id)
 
     from .live_ui import get_provider
     from .live_ui.session import LiveUISession
     from . import db as _db
+
+    # Per-task serialization: reject if another gui_agent is already running on this task.
+    # The caller should await the in-flight result before issuing the next invocation.
+    # Parallel supervisors on the same screen scramble UI state and can crash the browser.
+    if task_id and task_id in _active_gui_sessions:
+        active_sid = _active_gui_sessions[task_id]
+        return web.json_response({
+            "success": False,
+            "status": "busy",
+            "error": "another gui_agent is already running on this task",
+            "summary": (
+                f"Rejected: gui_agent session {active_sid} is already running on task {task_id}. "
+                "Await that result (it will return a status dict) before issuing the next gui_agent call. "
+                "Parallel supervisors on the same screen corrupt UI state."
+            ),
+            "active_session_id": active_sid,
+            "actions_taken": 0,
+            "actions_log": [],
+        }, status=409)
 
     try:
         provider = get_provider()
@@ -1142,7 +1164,13 @@ async def handle_gui_agent(request: web.Request) -> web.Response:
     if task_id:
         import json as _json
         actions = result.get("actions_taken", 0)
-        status = "completed" if result.get("success") else "failed"
+        gui_status = result.get("status")
+        if gui_status == "partial":
+            action_status = "partial"
+        elif result.get("success"):
+            action_status = "completed"
+        else:
+            action_status = "failed"
         input_data = _json.dumps({
             "session_id": session_id,
             "instruction": instruction[:200],
@@ -1151,16 +1179,42 @@ async def handle_gui_agent(request: web.Request) -> web.Response:
         summary = result.get("summary") or result.get("error") or "gui_agent finished without a summary"
         asyncio.ensure_future(task_mgr.log_action(
             task_id, "gui",
-            f"gui_agent ({actions} actions): {instruction[:100]}",
+            f"gui_agent ({actions} actions, {gui_status or 'unknown'}): {instruction[:100]}",
             input_data=input_data,
             output_data=_json.dumps({
                 **result,
                 "summary": summary,
             }),
-            status=status,
+            status=action_status,
         ))
 
     return web.json_response(result)
+
+
+async def handle_gui_agent_cancel(request: web.Request) -> web.Response:
+    """POST /gui_agent/cancel — signal a running gui_agent to stop at its next turn boundary.
+
+    Body: {"session_id": "..."} OR {"task_id": "..."} OR {"all": true}.
+    Returns: {"cancelled": bool, "count": int}.
+    """
+    args = await _parse_body(request)
+    from .live_ui.openrouter import cancel_session, cancel_all, _cancel_events
+
+    if args.get("all"):
+        n = cancel_all()
+        return web.json_response({"cancelled": n > 0, "count": n, "active_before": n})
+
+    target = args.get("session_id") or args.get("task_id")
+    if not target:
+        return web.json_response(
+            {"error": "provide session_id or task_id (or set all=true)"}, status=400
+        )
+    hit = cancel_session(target)
+    return web.json_response({
+        "cancelled": hit,
+        "target": target,
+        "active_sessions": sorted(k for k in _cancel_events.keys() if not k.startswith("task:")),
+    })
 
 
 # ─── Live session API ────────────────────────────────────────────
@@ -1453,6 +1507,7 @@ def create_app() -> web.Application:
     app.router.add_post("/mavi_understand", handle_mavi_understand)
     # GUI agent (unified)
     app.router.add_post("/gui_agent", handle_gui_agent)
+    app.router.add_post("/gui_agent/cancel", handle_gui_agent_cancel)
     app.router.add_post("/live_ui", handle_gui_agent)  # backward compat
     # Memory
     app.router.add_post("/memory_search", handle_memory_search)

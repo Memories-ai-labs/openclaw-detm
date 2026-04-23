@@ -76,4 +76,3 @@ Browser only          │  Perplexity Comet
 | Claude Cowork | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ (in VM) | ❌ |
 | Manus AI | ✅ | ✅ | Cloud only | Cloud shell | ❌ | ✅ (cloud VM) | ❌ |
 | **Our System** | ✅ | ✅ | ✅ | **✅** | **✅** | ✅ (shell) | ✅ (12+ platforms) |
-

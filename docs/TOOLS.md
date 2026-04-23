@@ -126,7 +126,18 @@ Delegate a multi-step UI workflow to a live vision model. The model sees the scr
 | `timeout` | int | no | Max seconds (default: 60, max: 300) |
 | `context` | string | no | Additional context for the model |
 
-Returns `success`, `summary`, `actions_taken`, `session_id`. The session is recorded to disk (frames + events + audio) and viewable in the dashboard via the "Live" button or replay viewer.
+Returns a dict with:
+- `status` — one of `complete`, `partial`, `failed`, `escalated`, `timeout`, `max_turns`, `format_error`, `error`. **Branch on this before acting.**
+- `success` — boolean. `complete` and `partial` are success=true; everything else is success=false.
+- `summary` — what the supervisor reports. Always populated.
+- `remaining` — present when `status=partial`. Describes what's left so the caller can continue.
+- `tried` — present when `status=failed`. List of approaches the supervisor attempted.
+- `escalation_reason` — present when `status=escalated`.
+- `actions_taken` — count of executed actions.
+- `actions_log` — last ~10 executed actions (strings like `"click(button=left)"`).
+- `session_id`, `elapsed_s` — for dashboard replay and timing.
+
+The session is recorded to disk (frames + events + audio) and viewable in the dashboard via the "Live" button or replay viewer.
 
 **Active provider**: OpenRouter request-response VLM (default model: `google/gemini-3-flash-preview`). Screenshots include ruler overlays for precise coordinate estimation.
 
