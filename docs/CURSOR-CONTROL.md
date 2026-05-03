@@ -1,5 +1,7 @@
 # Cursor Control — Research, Architecture & Roadmap
 
+> **Note (May 2026):** this doc analyzes cursor placement in the **supervised** backend (UI-TARS grounder). The production **bash** backend doesn't use a separate grounder — the LLM emits `xdotool mousemove X Y click 1` directly with absolute pixel coordinates and no iterative grounding step. The research below remains relevant if you select `ACU_LIVE_UI_BACKEND=supervised`.
+
 ## Problem
 
 Single-shot coordinate prediction is brittle. There are two failure modes:

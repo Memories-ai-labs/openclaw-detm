@@ -1,5 +1,7 @@
 # Architecture
 
+> **Production status (May 2026):** DETM's `gui_agent` runs on the **bash backend** by default — a single LLM (`openai/gpt-5.4` via OpenRouter) sees screenshots and writes raw `xdotool`/`wmctrl`/`scrot` commands directly. The **supervised** backend (Gemini Flash supervisor + UI-TARS grounder) described in some sections below is still in the codebase as `ACU_LIVE_UI_BACKEND=supervised` for benchmark reproducibility, but is no longer the default. See `docs/GUI-AGENT-BACKENDS.md` for the current backend reference and `docs/SCREENSHOT-CUA-MODELS.md` for the broader pixel-only CUA model landscape.
+
 ## Overview
 
 **agentic-computer-use** is a Desktop Environment Task Manager (DETM) — an MCP server with a persistent HTTP daemon that provides hierarchical task tracking, smart visual waiting, GUI automation with natural language grounding, pluggable vision backends, and real-time live UI delegation.

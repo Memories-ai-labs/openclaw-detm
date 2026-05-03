@@ -1,5 +1,7 @@
 # Performance Optimization — SmartWait + GUI Pipeline
 
+> **Note (May 2026):** the optimizations described in this doc target the **supervised** `gui_agent` backend (Gemini Flash supervisor + UI-TARS grounder). DETM's production default is now the **bash** backend (`openai/gpt-5.4` via OpenRouter), which doesn't use a supervisor/grounder split — most of the per-step optimizations here don't apply to it. The doc is kept for the supervised configuration which is still available as `ACU_LIVE_UI_BACKEND=supervised`.
+
 ## Overview
 
 This document summarizes all performance improvements made to the OpenClaw

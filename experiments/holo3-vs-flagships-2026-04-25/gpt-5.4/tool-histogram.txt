@@ -1,0 +1,12 @@
+gpt-5.4 vs Replicate (PARTIAL — 4/5)
+Wall-clock: 1038s (17m 18s)
+
+   38  agentic-computer-use__task_log_action
+   24  agentic-computer-use__task_update
+   23  agentic-computer-use__gui_agent
+   15  agentic-computer-use__desktop_look
+    5  read
+    5  agentic-computer-use__task_item_update
+    1  agentic-computer-use__humanize_status
+    1  agentic-computer-use__task_register
+  TOTAL: 112

@@ -1,0 +1,9 @@
+Run 2 (bare cold, Scale AI, 2026-04-24, 6m 20s)
+Session: /home/alex/.openclaw/agents/main/sessions/2384954d-f7cd-4d0e-833c-7bd4391aa26d.jsonl
+
+Main-LLM tool-call histogram:
+   21  exec
+   17  image
+    1  read
+
+  TOTAL: 39

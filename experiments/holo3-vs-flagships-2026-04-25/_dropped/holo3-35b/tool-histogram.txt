@@ -1,0 +1,16 @@
+H1 — Holo3-35B vs Together AI (FAILED — free-tier rate limit)
+Started: 2026-04-25T05:29:21Z
+Aborted: ~05:31 (Holo3-35B HTTP 429: 10 RPM exceeded)
+
+Tool histogram before rate-limit hit:
+    3  read
+    2  agentic-computer-use__task_log_action
+    2  agentic-computer-use__gui_agent
+    2  exec
+    1  update_plan
+    1  agentic-computer-use__task_register
+    1  agentic-computer-use__task_item_update
+    1  edit
+    1  agentic-computer-use__task_update
+
+  TOTAL: 14

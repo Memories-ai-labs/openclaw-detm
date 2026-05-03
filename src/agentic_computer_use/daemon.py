@@ -489,10 +489,27 @@ async def handle_health(request: web.Request) -> web.Response:
     from . import humanize as _humanize
     vision_health = await check_health()
     gui_backend = _get_backend()
+
+    # The multi-step gui_agent loop (what MCP `gui_agent` actually dispatches) is
+    # the live_ui path. Default production: bash + openai/gpt-5.4.
+    live_ui_backend = (config.LIVE_UI_BACKEND or "bash").lower()
+    if live_ui_backend == "bash":
+        live_ui_model = config.OPENROUTER_GUI_DIRECT_MODEL
+    elif live_ui_backend == "supervised":
+        live_ui_model = config.OPENROUTER_LIVE_MODEL  # Gemini supervisor
+    else:
+        live_ui_model = config.OPENROUTER_GUI_DIRECT_MODEL
+
     return web.json_response({
         "server": "ok", "daemon": True,
         "vision": vision_health,
         "vision_backend": config.VISION_BACKEND,
+        # Live-UI / multi-step gui_agent loop — this is what MCP `gui_agent` dispatches.
+        "live_ui_backend": live_ui_backend,
+        "live_ui_model": live_ui_model,
+        # Legacy single-shot grounder (gui_agent/agent.py — used by desktop_action only).
+        # Kept for backward compat. NOTE: these are NOT what the multi-step gui_agent
+        # tool uses — see live_ui_* fields above for that.
         "gui_agent_backend": config.GUI_AGENT_BACKEND,
         "gui_agent_provider": gui_backend.provider,
         "gui_agent_model": config.OPENROUTER_LIVE_MODEL,

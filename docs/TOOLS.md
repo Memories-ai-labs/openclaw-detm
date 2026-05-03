@@ -139,7 +139,11 @@ Returns a dict with:
 
 The session is recorded to disk (frames + events + audio) and viewable in the dashboard via the "Live" button or replay viewer.
 
-**Active provider**: OpenRouter request-response VLM (default model: `google/gemini-3-flash-preview`). Screenshots include ruler overlays for precise coordinate estimation.
+**Active provider** (production, May 2026): `live_ui/bash_backend.py` — single LLM via OpenRouter chat-completions with raw shell access. Default model `openai/gpt-5.4` (configurable via `ACU_OPENROUTER_GUI_DIRECT_MODEL`). The model writes `xdotool`/`wmctrl`/`scrot` commands directly; the harness executes them and feeds back stdout/stderr/exit_code + a fresh screenshot. Selected via `ACU_LIVE_UI_BACKEND=bash` (the default).
+
+The legacy supervised provider (Gemini Flash supervisor + UI-TARS grounder, default model `google/gemini-3-flash-preview`) is still available via `ACU_LIVE_UI_BACKEND=supervised` for benchmark reproducibility. Returned-shape (`status`/`success`/`summary`/...) is identical between backends.
+
+See `docs/GUI-AGENT-BACKENDS.md` for the full backend reference.
 
 ---
 

@@ -1,0 +1,115 @@
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session tui-85011d85-5fab-4437-92ab-b3e5f7575c25
+
+ session agent:main:tui-85011d85-5fab-4437-92ab-b3e5f7575c25
+
+
+DETM ONLY: Use DETM gui_agent to send 5 LinkedIn connection requests to employees of Perplexity AI. Verify each connection request was actually sent (the button should change to Pending or similar). At the end, report
+the names of all 5 people you connected with.
+
+
+
+ 🧩 Agentic-computer-use Task Register
+ {}
+ {"task_id": "71b9d891", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn search and find Perplexity AI
+ employees", "status": "pending"}, {"ordinal": 1, "title": "Send and verify 5 connection requests", "status": "pending"}, {"ordinal": 2, "title": "Report the 5 names connected with", "status": "pending"}], "created_at":
+ "2026-05-02T00:13:47.221699+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Humanize Status
+ {}
+ {"enabled": true, "since": 1777680737.1352444, "reason": "default from ACU_HUMANIZE", "defaults": {"typing_mean_ms": 115, "typing_range_ms": [55, 320], "word_pause_prob": 0.22, "word_pause_range_ms": [180, 600],
+ "click_dwell_range_ms": [40, 120], "thinking_pause_range_ms": [180, 900], "click_jitter_px": 2, "mouse_min_steps": 6, "mouse_step_target_ms": 14}}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "71b9d891", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn search and find Perplexity AI
+ employees", "status": "active", "duration_s": null, "actions": 4}, {"ordinal": 1, "title": "Send and verify 5 connection requests", "status": "pending", "duration_s": null, "actions": 0}, {"ordinal": 2, "title":
+ "Report the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T00:13:47.221699+00:00", "last_update": "2026-05-02T00:13:52.683549+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "37956e72", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Gui Agent
+ {}
+ {
+   "status": "error",
+   "tool": "agentic-computer-use__gui_agent ",
+   "error": "MCP error -32001: Request timed out"
+ }
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "71b9d891", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn search and find Perplexity AI
+ employees", "status": "active", "duration_s": null, "actions": 7}, {"ordinal": 1, "title": "Send and verify 5 connection requests", "status": "pending", "duration_s": null, "actions": 0}, {"ordinal": 2, "title":
+ "Report the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T00:13:47.221699+00:00", "last_update": "2026-05-02T00:13:58.579549+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "3215b2fe", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Desktop Look
+ {}
+ [image/jpeg 77kb (omitted)]
+ Screenshot: 1200×675px image (actual display: 1920×1080px). Specify x/y coordinates as pixel positions in this image (0,0 = top-left corner, 1200,675 = bottom-right). Coordinates are automatically scaled to screen
+ space.
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "71b9d891", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn search and find Perplexity AI
+ employees", "status": "active", "duration_s": null, "actions": 14}, {"ordinal": 1, "title": "Send and verify 5 connection requests", "status": "pending", "duration_s": null, "actions": 0}, {"ordinal": 2, "title":
+ "Report the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T00:13:47.221699+00:00", "last_update": "2026-05-02T00:15:15.368292+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Gui Agent
+ {}
+ {"success": false, "status": "busy", "error": "another gui_agent is already running on this task", "summary": "Rejected: gui_agent session 1fefe3df is already running on task 71b9d891. Await that result (it will return
+ a status dict) before issuing the next gui_agent call. Parallel supervisors on the same screen corrupt UI state.", "active_session_id": "1fefe3df", "actions_taken": 0, "actions_log": []}
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "24270794", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Desktop Look
+ {}
+ [image/jpeg 77kb (omitted)]
+ Screenshot: 1200×675px image (actual display: 1920×1080px). Specify x/y coordinates as pixel positions in this image (0,0 = top-left corner, 1200,675 = bottom-right). Coordinates are automatically scaled to screen
+ space.
+
+
+The DETM GUI agent got stuck before it could reach the Perplexity employee list.
+
+What I verified:
+- Firefox is open on LinkedIn
+- The screen is still sitting with the search/address bar focused
+- The first gui_agent call timed out
+- A second gui_agent call was blocked because the first GUI session is still marked active
+
+So I could not safely complete the 5 connection requests or verify any “Pending” state yet, and I don’t have 5 names to report.
+
+If you want, send me a quick “retry now” once the GUI lock clears or after you manually refocus the browser, and I’ll resume.
+ connected | idle
+ agent main | session tui-85011d85-5fab-4437-92ab-b3e5f7575c25 (openclaw-tui) | openai-codex/gpt-5.4 | think medium | verbose on | tokens 30k/200k (15%)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

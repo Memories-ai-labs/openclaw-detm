@@ -1,5 +1,7 @@
 # DETM Benchmarking Plan
 
+> **Production status (May 2026):** DETM's `gui_agent` defaults to the **bash backend** with `openai/gpt-5.4` via OpenRouter (~$0.20/task on the LinkedIn 5-connect benchmark). The cheap-model **supervised** stack described below (Gemini Flash + UI-TARS-7B) remains the lowest-cost configuration we've benchmarked at ~$0.07/task on the OSWorld Chrome subset, and is kept in the codebase for that reproducibility — but is no longer the default. See `experiments/holo3-vs-flagships-2026-04-25/` for the bake-off that picked bash + gpt-5.4.
+
 ## TL;DR
 
 DETM uses cheap models (Gemini Flash ~$0.10/M + UI-TARS-7B ~$0.15/M) instead of frontier models ($15-75/M). The question: can smart orchestration (iterative grounding, two-model split, edge detection) close the gap with agents that brute-force it with expensive models?

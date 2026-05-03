@@ -1,6 +1,6 @@
 # AI Agent Landscape Comparison — February 2026
 
-
+> **Snapshot from February 2026.** The "Our System" column describes DETM as it was then: supervised backend (Gemini Flash + UI-TARS-7B). DETM's production path has since changed to **bash + `openai/gpt-5.4`** (May 2026 bake-off). See `docs/GUI-AGENT-BACKENDS.md` for current state.
 
 ## TL;DR Table
 

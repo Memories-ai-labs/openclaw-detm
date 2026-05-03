@@ -9,24 +9,23 @@ Local daemon on `127.0.0.1:18790` with hierarchical task persistence, async wait
 
 ## Architecture — who owns what
 
-Three layers, each with a clear responsibility:
+Two layers with a clear split:
 
 **You (OpenClaw LLM)** — own the plan and the user. You decide what needs to happen, break it into steps, create the DETM task, and talk to the user. You have access to everything: CLI, web search, file system, DETM tools, and any other OpenClaw tools. During a DETM task, you are free to mix GUI actions with CLI commands, web searches, file writes, or any other tool — DETM handles visual GUI interaction, but that is not the only way to get things done. Use whatever is fastest and most reliable.
 
-**Supervisor (Gemini Flash)** — owns each action loop. When you call `gui_agent`, the supervisor takes over the screen. It sees screenshots, decides what to click/type/scroll, and uses the grounding model to place the cursor precisely. It verifies each action landed correctly before proceeding. It does NOT plan, does NOT know the broader task, and has NO access to CLI, files, or web search. It executes one concrete instruction and reports back.
-
-**Grounding model (UI-TARS)** — owns cursor placement. Given a screenshot and a target description ("the Submit button"), it predicts pixel coordinates. The supervisor verifies the placement visually and decides whether to click or retry. UI-TARS does no reasoning — it just points.
+**DETM `gui_agent` (GPT-5.4 with raw shell)** — owns the screenshot → action → verify loop. When you call `gui_agent`, a sub-agent (GPT-5.4 via OpenRouter) takes over the screen. It sees screenshots and writes raw `xdotool` / `wmctrl` / `scrot` commands to interact with the GUI; the harness executes them and feeds back stdout/stderr/exit_code plus a fresh screenshot. The sub-agent does NOT plan, does NOT know the broader task, and has NO access to web search or your file system — only the local shell and the screen. It executes one concrete instruction and reports back.
 
 ```
 You (plan, decide, talk to user)
   → gui_agent("click search bar, type hello, press Enter")
-    → Supervisor (screenshot → decide action → verify)
-      → UI-TARS (find element → return coordinates)
-    → Supervisor returns {status, success, summary, actions_log, ...}
+    → GPT-5.4 sub-agent loop:
+        screenshot → emit bash(xdotool …) → execute → fresh screenshot → repeat
+        until done / partial / failed / escalate
+    → returns {status, success, summary, actions_log, ...}
   → You read result, take desktop_look if needed, decide next step
 ```
 
-**Key principle:** DETM is one of your tools, not your only tool. If a website is broken and the fix is `pkill firefox && firefox <url> &`, do that via CLI. If you need to check whether a URL is up before navigating to it, use `curl`. The supervisor is fast at GUI manipulation but blind to everything else — you are the one with the full picture. All GUI interaction (clicking, typing, scrolling, keyboard shortcuts) goes through `gui_agent`. For CLI commands, use your native `Bash`/`exec` tools directly.
+**Key principle:** DETM is one of your tools, not your only tool. If a website is broken and the fix is `pkill firefox && firefox <url> &`, do that via CLI. If you need to check whether a URL is up before navigating to it, use `curl`. The gui_agent sub-agent is fast at GUI manipulation but blind to everything else — you are the one with the full picture. All GUI interaction (clicking, typing, scrolling, keyboard shortcuts) goes through `gui_agent`. For CLI commands, use your native `Bash`/`exec` tools directly.
 
 ## When to use DETM vs. other tools
 
@@ -172,7 +171,7 @@ This is how the human cancels you from the dashboard.
 
 ### gui_agent — deterministic GUI steps
 
-`gui_agent` is a fast vision-based executor. It handles the screenshot→action→verify loop using a vision model (Gemini Flash) and a grounding model (UI-TARS). It does NOT plan or reason about the broader task — that's your job.
+`gui_agent` is a fast vision-based executor. It handles the screenshot→action→verify loop using a single vision-capable LLM (GPT-5.4) that writes raw shell commands directly. It does NOT plan or reason about the broader task — that's your job.
 
 **Give it concrete, deterministic instructions (3-8 GUI steps).** Don't dump a whole task on it — break your work into small, verifiable chunks and check in between each.
 
@@ -213,6 +212,18 @@ Take a screenshot and reason about it yourself. No model is invoked — you inte
 
 **The goal is task completion, not visual purity.**
 
+## Starting from a known state
+
+You may inherit dirty desktop state from a prior task — wrong window focused, half-typed text in a field, modal popup blocking input, leftover search results, an app on a deep page. **Reset rather than fight it.** Trying to navigate around stale state via UI manipulation is one of the most common ways to burn a `gui_agent` budget.
+
+Order of escalation, cheapest first:
+
+1. **Dismiss modals and re-focus**: press `Escape`, then click a safe area or use a known shortcut (`Ctrl+L` for address bars, `Alt+Tab` to refocus).
+2. **Close the stale document/tab/window** if you don't need it: `Ctrl+W` (close tab), `Ctrl+Shift+W` (close window), or `wmctrl -c "<window name>"` for a specific window.
+3. **Restart the app**: `pkill -f <appname>` then relaunch with the URL/file you actually want. Loses unsaved work in that app, but gives you a known-good starting state in seconds.
+
+Don't bother leaving the screen pristine for the next task either — the next task will reset what it needs. Clean *into* your task, not *out of* it.
+
 ## Task lifecycle
 
 ```
@@ -244,7 +255,7 @@ If reality diverges from the plan, use `task_item_update(status="scrapped")` + `
 - `wait_status` / `wait_update` / `wait_cancel`
 
 ### GUI Agent
-- `gui_agent` — autonomous GUI agent (Gemini Flash + UI-TARS). Handles clicks, typing, scrolling, navigation, form filling. Returns `{status, success, summary, actions_taken, actions_log, …}` — branch on `status` (see "Read the `status` field" above).
+- `gui_agent` — autonomous GUI sub-agent (GPT-5.4 via OpenRouter, with raw shell access for `xdotool`/`wmctrl`/`scrot`). Handles clicks, typing, scrolling, navigation, form filling. Returns `{status, success, summary, actions_taken, actions_log, …}` — branch on `status` (see "Read the `status` field" above).
 
 ### Desktop
 - `desktop_look` — screenshot returned as image (you interpret it)

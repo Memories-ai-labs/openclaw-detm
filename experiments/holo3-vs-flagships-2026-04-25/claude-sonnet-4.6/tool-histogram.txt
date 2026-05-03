@@ -1,0 +1,13 @@
+claude-sonnet-4.6 vs Stability AI (FAILED — MCP timeouts)
+Wall-clock: 584s | 0/5 connections
+
+    6  agentic-computer-use__task_log_action
+    4  agentic-computer-use__task_update
+    4  agentic-computer-use__gui_agent
+    3  agentic-computer-use__task_item_update
+    3  agentic-computer-use__desktop_look
+    1  agentic-computer-use__task_register
+    1  read
+    1  exec
+    1  agentic-computer-use__health_check
+  TOTAL: 24

@@ -1,0 +1,9 @@
+gpt-5.4-bash vs Cognition AI (SUCCESS — 5/5 verified)
+Wall-clock: 3m 42s (222s)
+
+    7  agentic-computer-use__task_update
+    6  agentic-computer-use__task_item_update
+    6  agentic-computer-use__task_log_action
+    6  agentic-computer-use__gui_agent
+    1  agentic-computer-use__task_register
+  TOTAL: 26

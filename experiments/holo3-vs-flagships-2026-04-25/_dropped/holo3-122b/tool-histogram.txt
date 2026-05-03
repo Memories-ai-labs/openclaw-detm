@@ -1,0 +1,11 @@
+holo3-122b — Holo3-122B-A10B vs Cursor (FAILED — action-loop pathology)
+
+   16  agentic-computer-use__task_log_action
+    8  agentic-computer-use__gui_agent
+    7  agentic-computer-use__desktop_look
+    6  agentic-computer-use__task_update
+    5  agentic-computer-use__task_item_update
+    2  read
+    1  agentic-computer-use__task_register
+
+  TOTAL: 45

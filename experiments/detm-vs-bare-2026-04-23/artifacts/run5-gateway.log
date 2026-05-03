@@ -1,0 +1,57 @@
+2026-04-23T23:10:15+00:00 alxdws2 node[1166755]: 2026-04-23T23:10:15.986+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:10:25+00:00 alxdws2 node[1166755]: 2026-04-23T23:10:25.886+00:00 [reload] config change detected; evaluating reload (mcp.servers.agentic-computer-use.env.ACU_DISABLED_TOOLS)
+2026-04-23T23:10:26+00:00 alxdws2 node[1166755]: 2026-04-23T23:10:26.038+00:00 [reload] config change requires gateway restart (mcp.servers.agentic-computer-use.env.ACU_DISABLED_TOOLS)
+2026-04-23T23:10:26+00:00 alxdws2 node[1166755]: 2026-04-23T23:10:26.040+00:00 [gateway] signal SIGUSR1 received
+2026-04-23T23:10:26+00:00 alxdws2 node[1166755]: 2026-04-23T23:10:26.042+00:00 [gateway] received SIGUSR1; restarting
+2026-04-23T23:10:26+00:00 alxdws2 node[1166755]: 2026-04-23T23:10:26.044+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:10:26+00:00 alxdws2 node[1166755]: 2026-04-23T23:10:26.093+00:00 [gmail-watcher] gmail watcher stopped
+2026-04-23T23:10:26+00:00 alxdws2 node[1166755]: 2026-04-23T23:10:26.097+00:00 [gateway] restart mode: full process restart (supervisor restart)
+2026-04-23T23:10:26+00:00 alxdws2 systemd[2564]: openclaw-gateway.service: Consumed 1min 24.343s CPU time, 851.1M memory peak, 0B memory swap peak.
+2026-04-23T23:10:28+00:00 alxdws2 systemd[2564]: Stopped openclaw-gateway.service - OpenClaw Gateway (v2026.4.14).
+2026-04-23T23:10:28+00:00 alxdws2 systemd[2564]: openclaw-gateway.service: Consumed 1min 24.343s CPU time, 851.1M memory peak, 0B memory swap peak.
+2026-04-23T23:10:28+00:00 alxdws2 systemd[2564]: Started openclaw-gateway.service - OpenClaw Gateway (v2026.4.14).
+2026-04-23T23:10:31+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:31.710+00:00 [gateway] loading configuration…
+2026-04-23T23:10:31+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:31.819+00:00 [gateway] resolving authentication…
+2026-04-23T23:10:31+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:31.843+00:00 [gateway] starting...
+2026-04-23T23:10:33+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:33.762+00:00 (node:1176135) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-04-23T23:10:33+00:00 alxdws2 node[1176135]: (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-04-23T23:10:39+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:39.118+00:00 [gateway] starting HTTP server...
+2026-04-23T23:10:39+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:39.124+00:00 [canvas] host mounted at http://127.0.0.1:18789/__openclaw__/canvas/ (root /home/alex/.openclaw/canvas)
+2026-04-23T23:10:39+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:39.196+00:00 [health-monitor] started (interval: 300s, startup-grace: 60s, channel-connect-grace: 120s)
+2026-04-23T23:10:39+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:39.360+00:00 [gateway] agent model: openai-codex/gpt-5.4
+2026-04-23T23:10:39+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:39.365+00:00 [gateway] log file: /tmp/openclaw/openclaw-2026-04-23.log
+2026-04-23T23:10:39+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:39.491+00:00 [gateway] security warning: dangerous config flags enabled: gateway.controlUi.allowInsecureAuth=true, gateway.controlUi.dangerouslyDisableDeviceAuth=true. Run `openclaw security audit`.
+2026-04-23T23:10:39+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:39.493+00:00 [gateway] starting channels and sidecars...
+2026-04-23T23:10:39+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:39.738+00:00 [hooks] loaded 4 internal hook handlers
+2026-04-23T23:10:49+00:00 alxdws2 node[1176135]: 2026-04-23T23:10:49.778+00:00 [bonjour] watchdog detected non-announced service; attempting re-advertise (gateway fqdn=alxdws2 (OpenClaw)._openclaw-gw._tcp.local. host=openclaw.local. port=18789 state=probing)
+2026-04-23T23:11:02+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:02.241+00:00 [plugins] embedded acpx runtime backend registered (cwd: /home/alex/.openclaw/workspace)
+2026-04-23T23:11:02+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:02.277+00:00 [browser/server] Browser control listening on http://127.0.0.1:18791/ (auth=token)
+2026-04-23T23:11:02+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:02.287+00:00 [voice-call] Webhook server listening on http://127.0.0.1:3334/voice/webhook
+2026-04-23T23:11:02+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:02.290+00:00 [plugins] [voice-call] Runtime initialized
+2026-04-23T23:11:02+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:02.291+00:00 [plugins] [voice-call] Webhook URL: http://127.0.0.1:3334/voice/webhook
+2026-04-23T23:11:02+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:02.920+00:00 [heartbeat] started
+2026-04-23T23:11:03+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:03.185+00:00 [discord] [default] Discord Message Content Intent is limited; bots under 100 servers can use it without verification.
+2026-04-23T23:11:03+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:03.188+00:00 [discord] [default] starting provider (@openclaw1)
+2026-04-23T23:11:03+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:03.640+00:00 [discord] channels resolved: 1467781011600314545/1476717051853668432 (guild:claw; channel:memories-ai-tests)
+2026-04-23T23:11:03+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:03.647+00:00 [discord] channel users resolved: 754022188629229688
+2026-04-23T23:11:04+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:04.076+00:00 [skills] Skipping escaped skill path outside its configured root: source=openclaw-workspace root=~/.openclaw/workspace/skills reason=symlink-escape requested=~/.openclaw/workspace/skills/agentic-computer-use resolved=~/openclaw-memoriesai/skill
+2026-04-23T23:11:04+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:04.302+00:00 [skills] Skipping escaped skill path outside its configured root: source=openclaw-workspace root=~/.openclaw/agents/linkedin/workspace/skills reason=symlink-escape requested=~/.openclaw/agents/linkedin/workspace/skills/agentic-computer-use resolved=~/openclaw-memoriesai/skill
+2026-04-23T23:11:04+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:04.507+00:00 [skills] Skipping escaped skill path outside its configured root: source=openclaw-workspace root=~/.openclaw/agents/tiktok/workspace/skills reason=symlink-escape requested=~/.openclaw/agents/tiktok/workspace/skills/agentic-computer-use resolved=~/openclaw-memoriesai/skill
+2026-04-23T23:11:04+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:04.630+00:00 [plugins] embedded acpx runtime backend ready
+2026-04-23T23:11:05+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:05.127+00:00 [discord] client initialized as 1467773803093430316 (openclaw1); awaiting gateway readiness
+2026-04-23T23:11:06+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:06.108+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:11:15+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:15.646+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:11:24+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:24.919+00:00 [ws] ⇄ res ✓ chat.history 3920ms conn=27641b24…006c id=e43ee056…f3a4
+2026-04-23T23:11:25+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:25.366+00:00 [ws] ⇄ res ✓ sessions.list 437ms conn=27641b24…006c id=d97c1378…6ed2
+2026-04-23T23:11:29+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:29.394+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:11:36+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:36.243+00:00 [skills] Skipping escaped skill path outside its configured root: source=openclaw-workspace root=~/.openclaw/workspace/skills reason=symlink-escape requested=~/.openclaw/workspace/skills/agentic-computer-use resolved=~/openclaw-memoriesai/skill
+2026-04-23T23:11:51+00:00 alxdws2 node[1176135]: 2026-04-23T23:11:51.925+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:12:35+00:00 alxdws2 node[1176135]: 2026-04-23T23:12:35.290+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:14:04+00:00 alxdws2 node[1176135]: 2026-04-23T23:14:04.736+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:15:22+00:00 alxdws2 node[1176135]: 2026-04-23T23:15:22.523+00:00 [ws] ⇄ res ✓ sessions.list 289ms conn=27641b24…006c id=bd627fdd…dc6c
+2026-04-23T23:16:54+00:00 alxdws2 node[1176135]: 2026-04-23T23:16:54.152+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:17:00+00:00 alxdws2 node[1176135]: 2026-04-23T23:17:00.056+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:17:13+00:00 alxdws2 node[1176135]: 2026-04-23T23:17:13.166+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:17:38+00:00 alxdws2 node[1176135]: 2026-04-23T23:17:38.856+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:18:23+00:00 alxdws2 node[1176135]: 2026-04-23T23:18:23.346+00:00 WhatsApp session logged out. Run: openclaw channels login
+2026-04-23T23:19:54+00:00 alxdws2 node[1176135]: 2026-04-23T23:19:54.336+00:00 WhatsApp session logged out. Run: openclaw channels login

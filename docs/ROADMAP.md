@@ -1,5 +1,7 @@
 # Roadmap
 
+> **Production status (May 2026):** the supervised `gui_agent` pipeline (Phases 2–5) shipped and was the production default through April. Post-bake-off (`experiments/holo3-vs-flagships-2026-04-25/`), production switched to the **bash** backend with `openai/gpt-5.4` — `ACU_LIVE_UI_BACKEND=bash` is now the default. The supervised pipeline remains in the codebase as a fallback. See `docs/GUI-AGENT-BACKENDS.md`.
+
 ## Phase 1: Architecture & Research ← DONE
 
 - [x] Problem definition

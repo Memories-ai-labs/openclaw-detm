@@ -82,8 +82,21 @@ MERGE_REASONING = os.environ.get("ACU_MERGE_REASONING", "false").lower() in ("tr
 # OpenClaw CLI path
 OPENCLAW_CLI = os.environ.get("ACU_OPENCLAW_CLI", "openclaw")
 
-# GUI Agent
+# GUI Agent grounding backend (used by gui_agent/agent.py for single-shot grounding —
+# different from LIVE_UI_BACKEND below which controls the multi-step gui_agent loop).
 GUI_AGENT_BACKEND = os.environ.get("ACU_GUI_AGENT_BACKEND", "direct")  # omniparser|uitars|claude_cu|direct
+
+# Live-UI / multi-step gui_agent backend.
+#   bash       — default. Single bash(command) tool over OpenRouter chat-completions.
+#                Production model: openai/gpt-5.4 (via ACU_OPENROUTER_GUI_DIRECT_MODEL).
+#                See docs/GUI-AGENT-BACKENDS.md.
+#   supervised — legacy: Gemini-Flash supervisor + UI-TARS-1.5-7B grounder (two API calls per action).
+#                Kept for benchmark reproducibility; not the production path.
+# Other backends (holo3, openrouter direct) live on the feat/multi-backend-gui-agent branch.
+LIVE_UI_BACKEND = os.environ.get("ACU_LIVE_UI_BACKEND", "bash").lower()
+
+# Model used by the bash backend for the gui_agent loop. Default openai/gpt-5.4 — bake-off winner.
+OPENROUTER_GUI_DIRECT_MODEL = os.environ.get("ACU_OPENROUTER_GUI_DIRECT_MODEL", "openai/gpt-5.4")
 
 # OmniParser (SoM-based GUI grounding)
 OMNIPARSER_PICKER_MODEL = os.environ.get("ACU_OMNIPARSER_PICKER_MODEL", "claude-haiku-4-5-20251001")

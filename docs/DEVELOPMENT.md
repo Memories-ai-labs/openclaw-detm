@@ -10,10 +10,11 @@ openclaw-memoriesai/
 │   ├── config.py                # All configuration (env vars)
 │   ├── task/                    # Task manager + SQLite models
 │   ├── wait/                    # Smart Wait engine
-│   ├── gui_agent/               # GUI grounding backends (UI-TARS, Claude CU, OmniParser)
-│   ├── live_ui/                 # gui_agent provider (Gemini + UI-TARS)
-│   │   ├── openrouter.py        # Main agent loop
-│   │   ├── actions.py           # xdotool action execution
+│   ├── gui_agent/               # legacy single-shot grounding (UI-TARS, Claude CU, OmniParser) — used by desktop_action only
+│   ├── live_ui/                 # multi-step gui_agent loop (the production gui_agent MCP path)
+│   │   ├── bash_backend.py      # PRODUCTION: single LLM (openai/gpt-5.4) + raw bash. Default.
+│   │   ├── openrouter.py        # Legacy supervised: Gemini Flash + UI-TARS grounder. ACU_LIVE_UI_BACKEND=supervised
+│   │   ├── actions.py           # xdotool action execution (used by supervised)
 │   │   └── session.py           # Session recording
 │   ├── capture/                 # Screen capture (Xlib, PIL)
 │   ├── vision/                  # Vision backends (Ollama, vLLM, Claude, OpenRouter)
@@ -143,12 +144,27 @@ OpenClaw → MCP server (server.py) → HTTP POST → daemon.py handler → busi
 
 Every tool defined in `server.py` maps to a daemon HTTP endpoint. The mapping is in `TOOL_ROUTES`.
 
-### gui_agent flow
+### gui_agent flow (production: bash backend)
 
 ```
 gui_agent(instruction)
   → daemon.handle_gui_agent()
-  → openrouter.run() — main Gemini loop
+  → live_ui/__init__.get_provider() picks backend from ACU_LIVE_UI_BACKEND (default 'bash')
+  → bash_backend.BashGuiProvider.run() — single-LLM loop:
+    ├─ Capture screenshot → POST /chat/completions with tools=[bash, screenshot, done, partial, failed, escalate]
+    ├─ Model emits bash(command="xdotool key Ctrl+l; xdotool type 'https://...'; xdotool key Return")
+    ├─ Daemon executes via subprocess.Popen + os.killpg on timeout → returns stdout/stderr/exit_code
+    ├─ Capture fresh screenshot, append to messages, repeat
+    ├─ Model emits done(summary="...") | partial(...) | failed(...) | escalate(...)
+    └─ Return result to daemon → MCP server → OpenClaw
+```
+
+### gui_agent flow (legacy: supervised backend, ACU_LIVE_UI_BACKEND=supervised)
+
+```
+gui_agent(instruction)
+  → daemon.handle_gui_agent()
+  → openrouter.run() — Gemini supervisor + UI-TARS grounder:
     ├─ Capture screenshot → send to Gemini with tool definitions
     ├─ Gemini calls move_to(target="...")
     │   → _refine_cursor() → UI-TARS grounding + iterative narrowing + convergence check

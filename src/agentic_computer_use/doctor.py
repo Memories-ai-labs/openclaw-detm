@@ -223,6 +223,213 @@ async def _check_backend_openrouter(key: str) -> CheckResult:
         return CheckResult("backends", "openrouter", FAIL, str(e))
 
 
+async def _check_openrouter_model(key: str, model: str) -> CheckResult:
+    """Verify a specific model id is currently served on OpenRouter.
+
+    The /auth/key probe in `_check_backend_openrouter` only proves the key works.
+    A model snapshot (e.g. `openai/gpt-5.4-20260305`) can be retired without the
+    key changing, so we hit /models and check membership explicitly.
+    """
+    if not key:
+        return CheckResult("backends", f"openrouter model {model}", WARN,
+                           "no OPENROUTER_API_KEY — cannot probe model availability")
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as c:
+            r = await c.get(
+                "https://openrouter.ai/api/v1/models",
+                headers={"Authorization": f"Bearer {key}"},
+            )
+        if r.status_code != 200:
+            return CheckResult("backends", f"openrouter model {model}", WARN,
+                               f"models listing HTTP {r.status_code}")
+        ids = {m.get("id", "") for m in (r.json().get("data") or [])}
+        # OpenRouter prefix-matches dated snapshots (e.g. openai/gpt-5.4 → openai/gpt-5.4-YYYYMMDD)
+        if model in ids:
+            return CheckResult("backends", f"openrouter model {model}", OK, "served")
+        prefix_hits = [i for i in ids if i.startswith(model)]
+        if prefix_hits:
+            return CheckResult("backends", f"openrouter model {model}", OK,
+                               f"served via snapshot: {prefix_hits[0]}")
+        return CheckResult("backends", f"openrouter model {model}", FAIL,
+                           f"model id not found in {len(ids)} listed (retired?)")
+    except httpx.HTTPError as e:
+        return CheckResult("backends", f"openrouter model {model}", FAIL, str(e))
+
+
+def _capture_thumbnail_b64(display: str, max_w: int = 320, timeout_s: float = 1.5) -> str | None:
+    """Capture a small JPEG thumbnail from `display`. No trace left behind.
+
+    Uses scrot → temp file → PIL resize → base64 → unlink. No logging, no session,
+    no DB write. Returns None on any failure (caller treats as a smoke-test fail).
+    """
+    import base64
+    import io
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".png", prefix=".acu_smoke_")
+    try:
+        os.close(fd)
+        env = {**os.environ, "DISPLAY": display}
+        r = subprocess.run(
+            ["scrot", "--overwrite", path],
+            env=env, capture_output=True, timeout=timeout_s,
+        )
+        if r.returncode != 0:
+            return None
+        try:
+            from PIL import Image  # type: ignore
+            with Image.open(path) as img:
+                img.thumbnail((max_w, max_w))
+                buf = io.BytesIO()
+                img.convert("RGB").save(buf, format="JPEG", quality=55)
+                return base64.b64encode(buf.getvalue()).decode("ascii")
+        except ImportError:
+            # Fallback: send the full PNG (OpenRouter accepts it; just larger upload)
+            with open(path, "rb") as f:
+                return base64.b64encode(f.read()).decode("ascii")
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+async def _check_gui_agent_smoke(
+    backend: str, model: str, key: str, display: str, budget_s: float = 4.0,
+) -> CheckResult:
+    """End-to-end gui_agent round-trip smoke test — bounded at 4s, no traces.
+
+    What it exercises:
+      - scrot can capture from `display`
+      - OpenRouter is reachable + the configured model serves
+      - Vision input is accepted
+      - Tool calling is honored (`tool_choice: required`)
+
+    What it does NOT do:
+      - Go through the bash_backend.py loop (no _record_usage, no session,
+        no _dbg.log, no DB write, no cancel-event registry entry)
+      - Execute any bash command (the smoke prompt forces an immediate `done`)
+      - Capture more than one frame
+
+    The whole call is bounded by httpx.AsyncClient(timeout=budget_s); on timeout
+    or failure we return FAIL/WARN with the elapsed ms so a maintainer can see
+    where it slowed down. Skipped if backend != 'bash' (supervised-loop probe
+    would need a different shape).
+    """
+    if backend != "bash":
+        return CheckResult("live_ui", "round-trip smoke", SKIP,
+                           f"backend={backend} (smoke test is bash-specific)")
+    if not key:
+        return CheckResult("live_ui", "round-trip smoke", WARN,
+                           "no OPENROUTER_API_KEY — cannot probe")
+
+    t0 = time.perf_counter()
+    b64 = _capture_thumbnail_b64(display)
+    cap_ms = (time.perf_counter() - t0) * 1000
+    if not b64:
+        return CheckResult("live_ui", "round-trip smoke", FAIL,
+                           f"screenshot capture failed ({cap_ms:.0f}ms)")
+
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system",
+             "content": "Smoke test. Call the `done` tool once with summary='ok' and stop. Do not call any other tool."},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Smoke test. Call done() now."},
+                {"type": "image_url",
+                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+            ]},
+        ],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "done",
+                "description": "Confirm the smoke test round-trip is alive.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"summary": {"type": "string"}},
+                    "required": ["summary"],
+                },
+            },
+        }],
+        "tool_choice": "required",
+        "max_tokens": 50,
+    }
+    # Silence httpx INFO line for this single call so the smoke test leaves
+    # no log trace at all (DB writes / temp files / sessions are also avoided).
+    import logging as _logging
+    _httpx_log = _logging.getLogger("httpx")
+    _prev_level = _httpx_log.level
+    _httpx_log.setLevel(_logging.WARNING)
+    try:
+        async with httpx.AsyncClient(timeout=budget_s) as c:
+            api_t0 = time.perf_counter()
+            r = await c.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+            )
+            api_ms = (time.perf_counter() - api_t0) * 1000
+        if r.status_code != 200:
+            return CheckResult("live_ui", "round-trip smoke", FAIL,
+                               f"HTTP {r.status_code}: {r.text[:120]}")
+        data = r.json()
+        try:
+            msg = data["choices"][0]["message"]
+            tool_calls = msg.get("tool_calls") or []
+        except (KeyError, IndexError, TypeError):
+            return CheckResult("live_ui", "round-trip smoke", FAIL,
+                               f"malformed response shape (api_ms={api_ms:.0f})")
+        if not tool_calls:
+            finish = data["choices"][0].get("finish_reason")
+            return CheckResult("live_ui", "round-trip smoke", FAIL,
+                               f"no tool_call returned (finish={finish}, api_ms={api_ms:.0f})")
+        name = (tool_calls[0].get("function") or {}).get("name", "?")
+        if name != "done":
+            return CheckResult("live_ui", "round-trip smoke", WARN,
+                               f"unexpected tool {name!r} (api_ms={api_ms:.0f})")
+        total_ms = (time.perf_counter() - t0) * 1000
+        return CheckResult("live_ui", "round-trip smoke", OK,
+                           f"{total_ms:.0f}ms (capture={cap_ms:.0f}, api={api_ms:.0f})")
+    except httpx.TimeoutException:
+        return CheckResult("live_ui", "round-trip smoke", FAIL,
+                           f"timed out >{budget_s}s")
+    except httpx.HTTPError as e:
+        return CheckResult("live_ui", "round-trip smoke", FAIL,
+                           f"{type(e).__name__}: {e}")
+    finally:
+        _httpx_log.setLevel(_prev_level)
+
+
+def _check_live_ui_backend(unit_env: dict[str, str]) -> CheckResult:
+    """Verify the multi-step gui_agent backend is set to a known value.
+
+    LIVE_UI_BACKEND is the production-critical setting — it picks which provider
+    runs inside MCP's `gui_agent` tool. Default is `bash` (production) but can be
+    `supervised` (legacy). Anything else is a typo that will raise at first call.
+    """
+    backend = (unit_env.get("ACU_LIVE_UI_BACKEND")
+               or os.environ.get("ACU_LIVE_UI_BACKEND")
+               or config.LIVE_UI_BACKEND
+               or "bash").lower()
+    model = (unit_env.get("ACU_OPENROUTER_GUI_DIRECT_MODEL")
+             or os.environ.get("ACU_OPENROUTER_GUI_DIRECT_MODEL")
+             or config.OPENROUTER_GUI_DIRECT_MODEL)
+    if backend not in ("bash", "supervised"):
+        return CheckResult("live_ui", "backend", FAIL,
+                           f"ACU_LIVE_UI_BACKEND={backend!r} unknown — must be 'bash' or 'supervised'")
+    if backend == "bash":
+        return CheckResult("live_ui", "backend", OK,
+                           f"bash + {model} (production)")
+    return CheckResult("live_ui", "backend", WARN,
+                       f"supervised (legacy) — production is bash + openai/gpt-5.4")
+
+
 async def _check_backend_anthropic(key: str) -> CheckResult:
     if not key:
         return CheckResult("backends", "anthropic", SKIP, "no ANTHROPIC_API_KEY set")
@@ -488,6 +695,8 @@ async def run_diagnostics() -> list[CheckResult]:
     mavi_key       = _env("MAVI_API_KEY", "")
     vision_backend = _env("ACU_VISION_BACKEND", config.VISION_BACKEND)
     gui_backend    = _env("ACU_GUI_AGENT_BACKEND", config.GUI_AGENT_BACKEND)
+    live_ui_backend = _env("ACU_LIVE_UI_BACKEND", config.LIVE_UI_BACKEND or "bash").lower()
+    live_ui_model   = _env("ACU_OPENROUTER_GUI_DIRECT_MODEL", config.OPENROUTER_GUI_DIRECT_MODEL)
 
     results: list[CheckResult] = []
 
@@ -512,10 +721,24 @@ async def run_diagnostics() -> list[CheckResult]:
         # Dashboard
         results.append(await _check_dashboard(client))
 
+        # Live-UI / multi-step gui_agent backend (production: bash + openai/gpt-5.4).
+        # Surfacing this early so it lands above the generic key checks.
+        results.append(_check_live_ui_backend(unit_env))
+
         # Backends — only probe what the install actually uses
         backend_tasks: list = []
-        if vision_backend == "openrouter" or gui_backend == "uitars":
+        if vision_backend == "openrouter" or gui_backend == "uitars" or live_ui_backend == "bash":
             backend_tasks.append(_check_backend_openrouter(openrouter_key))
+        # Probe the specific live_ui model on OpenRouter — catches "snapshot retired"
+        # which the generic key probe misses.
+        if live_ui_backend == "bash" and openrouter_key:
+            backend_tasks.append(_check_openrouter_model(openrouter_key, live_ui_model))
+        # End-to-end round-trip smoke test (bash backend only; bounded at 4s).
+        if live_ui_backend == "bash" and openrouter_key:
+            backend_tasks.append(_check_gui_agent_smoke(
+                live_ui_backend, live_ui_model, openrouter_key,
+                _env("DISPLAY", config.DISPLAY),
+            ))
         if vision_backend == "claude" or gui_backend == "claude_cu":
             backend_tasks.append(_check_backend_anthropic(anthropic_key))
         if vision_backend == "ollama" or gui_backend == "direct":
