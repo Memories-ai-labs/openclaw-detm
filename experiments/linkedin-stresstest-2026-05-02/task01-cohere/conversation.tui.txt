@@ -1,0 +1,363 @@
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session tui-03140e3a-2bea-4d72-8619-fb4e11ddf9b3
+
+ session agent:main:tui-03140e3a-2bea-4d72-8619-fb4e11ddf9b3
+
+
+DETM ONLY: Use DETM gui_agent to send 5 LinkedIn connection requests to employees of Cohere. Verify each connection request was actually sent (the button should change to Pending). At the end, report the names of all 5
+people you connected with.
+
+
+
+ 🧩 Agentic-computer-use Task Register
+ {}
+ {"task_id": "c8bf0298", "name": "Send 5 LinkedIn connection requests to Cohere employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and navigate to Cohere employee
+ profiles", "status": "pending"}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending"}, {"ordinal": 2, "title": "Summarize the 5 names connected with",
+ "status": "pending"}], "created_at": "2026-05-02T04:17:16.014838+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Humanize Status
+ {}
+ {"enabled": true, "since": 1777681646.0580962, "reason": "default from ACU_HUMANIZE", "defaults": {"typing_mean_ms": 115, "typing_range_ms": [55, 320], "word_pause_prob": 0.22, "word_pause_range_ms": [180, 600],
+ "click_dwell_range_ms": [40, 120], "thinking_pause_range_ms": [180, 900], "click_jitter_px": 2, "mouse_min_steps": 6, "mouse_step_target_ms": 14}}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "c8bf0298", "name": "Send 5 LinkedIn connection requests to Cohere employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and navigate to Cohere employee
+ profiles", "status": "active", "duration_s": null, "actions": 3}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending", "duration_s": null, "actions":
+ 0}, {"ordinal": 2, "title": "Summarize the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T04:17:16.014838+00:00", "last_update":
+ "2026-05-02T04:17:21.361659+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "ca1cf0a5", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "c8bf0298", "name": "Send 5 LinkedIn connection requests to Cohere employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and navigate to Cohere employee
+ profiles", "status": "active", "duration_s": null, "actions": 4}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending", "duration_s": null, "actions":
+ 0}, {"ordinal": 2, "title": "Summarize the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T04:17:16.014838+00:00", "last_update":
+ "2026-05-02T04:17:21.376241+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Gui Agent
+ {}
+ {
+   "status": "error",
+   "tool": "agentic-computer-use__gui_agent ",
+   "error": "MCP error -32001: Request timed out"
+ }
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "a412d80e", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "c8bf0298", "name": "Send 5 LinkedIn connection requests to Cohere employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and navigate to Cohere employee
+ profiles", "status": "active", "duration_s": null, "actions": 11}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending", "duration_s": null, "actions":
+ 0}, {"ordinal": 2, "title": "Summarize the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T04:17:16.014838+00:00", "last_update":
+ "2026-05-02T04:18:32.003888+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Desktop Look
+ {}
+ [image/jpeg 98kb (omitted)]
+ Screenshot: 1200×675px image (actual display: 1920×1080px). Specify x/y coordinates as pixel positions in this image (0,0 = top-left corner, 1200,675 = bottom-right). Coordinates are automatically scaled to screen
+ space.
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "d5b7ba89", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "c8bf0298", "name": "Send 5 LinkedIn connection requests to Cohere employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and navigate to Cohere employee
+ profiles", "status": "active", "duration_s": null, "actions": 16}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending", "duration_s": null, "actions":
+ 0}, {"ordinal": 2, "title": "Summarize the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T04:17:16.014838+00:00", "last_update":
+ "2026-05-02T04:18:40.884851+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Gui Agent
+ {}
+ {"success": false, "status": "busy", "error": "another gui_agent is already running on this task", "summary": "Rejected: gui_agent session 97f4cb07 is already running on task c8bf0298. Await that result (it will return
+ a status dict) before issuing the next gui_agent call. Parallel supervisors on the same screen corrupt UI state.", "active_session_id": "97f4cb07", "actions_taken": 0, "actions_log": []}
+
+
+
+ 🧩 Agentic-computer-use Desktop Look
+ {}
+ [image/jpeg 98kb (omitted)]
+ Screenshot: 1200×675px image (actual display: 1920×1080px). Specify x/y coordinates as pixel positions in this image (0,0 = top-left corner, 1200,675 = bottom-right). Coordinates are automatically scaled to screen
+ space.
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "abcdfbcd", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "c8bf0298", "name": "Send 5 LinkedIn connection requests to Cohere employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and navigate to Cohere employee
+ profiles", "status": "active", "duration_s": null, "actions": 25}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending", "duration_s": null, "actions":
+ 0}, {"ordinal": 2, "title": "Summarize the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T04:17:16.014838+00:00", "last_update":
+ "2026-05-02T04:19:02.121384+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Register
+ {}
+ {"task_id": "fbf5698c", "name": "Recovery: send 5 LinkedIn connection requests to Cohere employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Navigate from the current LinkedIn page to
+ Cohere employee search results", "status": "pending"}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending"}, {"ordinal": 2, "title": "Report the 5 names
+ connected with", "status": "pending"}], "created_at": "2026-05-02T04:19:02.120370+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "fbf5698c", "name": "Recovery: send 5 LinkedIn connection requests to Cohere employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Navigate from the current LinkedIn page to
+ Cohere employee search results", "status": "active", "duration_s": null, "actions": 3}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending",
+ "duration_s": null, "actions": 0}, {"ordinal": 2, "title": "Report the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:19:02.120370+00:00", "last_update": "2026-05-02T04:19:07.851341+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "76251450", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "fbf5698c", "name": "Recovery: send 5 LinkedIn connection requests to Cohere employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Navigate from the current LinkedIn page to
+ Cohere employee search results", "status": "pending", "duration_s": null, "actions": 2}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending",
+ "duration_s": null, "actions": 0}, {"ordinal": 2, "title": "Report the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:19:02.120370+00:00", "last_update": "2026-05-02T04:19:07.850438+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Gui Agent
+ {}
+ {
+   "status": "error",
+   "tool": "agentic-computer-use__gui_agent ",
+   "error": "MCP error -32001: Request timed out"
+ }
+
+
+
+ 🧩 Agentic-computer-use Desktop Look
+ {}
+ [image/jpeg 101kb (omitted)]
+ Screenshot: 1200×675px image (actual display: 1920×1080px). Specify x/y coordinates as pixel positions in this image (0,0 = top-left corner, 1200,675 = bottom-right). Coordinates are automatically scaled to screen
+ space.
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "68b4e5a0", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "fbf5698c", "name": "Recovery: send 5 LinkedIn connection requests to Cohere employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Navigate from the current LinkedIn page to
+ Cohere employee search results", "status": "active", "duration_s": null, "actions": 11}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending",
+ "duration_s": null, "actions": 0}, {"ordinal": 2, "title": "Report the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:19:02.120370+00:00", "last_update": "2026-05-02T04:20:24.439687+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Gui Agent
+ {}
+ {"success": false, "status": "busy", "error": "another gui_agent is already running on this task", "summary": "Rejected: gui_agent session 0ae16555 is already running on task fbf5698c. Await that result (it will return
+ a status dict) before issuing the next gui_agent call. Parallel supervisors on the same screen corrupt UI state.", "active_session_id": "0ae16555", "actions_taken": 0, "actions_log": []}
+
+
+
+ 🧩 Agentic-computer-use Task Register
+ {}
+ {"task_id": "8aaa6d67", "name": "Atomic LinkedIn recovery step", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Replace the current LinkedIn URL with a Cohere employee search URL", "status":
+ "pending"}, {"ordinal": 1, "title": "Verify the Cohere results page loads", "status": "pending"}], "created_at": "2026-05-02T04:20:37.880986+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "8aaa6d67", "name": "Atomic LinkedIn recovery step", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Replace the current LinkedIn URL with a Cohere employee search URL", "status":
+ "active", "duration_s": null, "actions": 2}, {"ordinal": 1, "title": "Verify the Cohere results page loads", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:20:37.880986+00:00", "last_update": "2026-05-02T04:20:43.414577+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "3510d1de", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "8aaa6d67", "name": "Atomic LinkedIn recovery step", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Replace the current LinkedIn URL with a Cohere employee search URL", "status":
+ "active", "duration_s": null, "actions": 3}, {"ordinal": 1, "title": "Verify the Cohere results page loads", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:20:37.880986+00:00", "last_update": "2026-05-02T04:20:43.430644+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Gui Agent
+ {}
+ {
+   "status": "error",
+   "tool": "agentic-computer-use__gui_agent ",
+   "error": "MCP error -32001: Request timed out"
+ }
+
+
+
+ 🧩 Agentic-computer-use Desktop Look
+ {}
+ [image/jpeg 98kb (omitted)]
+ Screenshot: 1200×675px image (actual display: 1920×1080px). Specify x/y coordinates as pixel positions in this image (0,0 = top-left corner, 1200,675 = bottom-right). Coordinates are automatically scaled to screen
+ space.
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "4aeee23f", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "8aaa6d67", "name": "Atomic LinkedIn recovery step", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Replace the current LinkedIn URL with a Cohere employee search URL", "status":
+ "active", "duration_s": null, "actions": 12}, {"ordinal": 1, "title": "Verify the Cohere results page loads", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:20:37.880986+00:00", "last_update": "2026-05-02T04:22:03.960549+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Register
+ {}
+ {"task_id": "86f9ec2f", "name": "Atomic LinkedIn recovery step 2", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Overwrite the partial address-bar text with the full Cohere employee search
+ URL", "status": "pending"}, {"ordinal": 1, "title": "Verify the results page loads", "status": "pending"}], "created_at": "2026-05-02T04:22:03.958996+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "86f9ec2f", "name": "Atomic LinkedIn recovery step 2", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Overwrite the partial address-bar text with the full Cohere employee search
+ URL", "status": "active", "duration_s": null, "actions": 1}, {"ordinal": 1, "title": "Verify the results page loads", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:22:03.958996+00:00", "last_update": "2026-05-02T04:22:11.160188+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "37c66da4", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "86f9ec2f", "name": "Atomic LinkedIn recovery step 2", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Overwrite the partial address-bar text with the full Cohere employee search
+ URL", "status": "active", "duration_s": null, "actions": 3}, {"ordinal": 1, "title": "Verify the results page loads", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:22:03.958996+00:00", "last_update": "2026-05-02T04:22:11.161207+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Gui Agent
+ {}
+ {
+   "status": "error",
+   "tool": "agentic-computer-use__gui_agent ",
+   "error": "MCP error -32001: Request timed out"
+ }
+
+
+
+ 🧩 Agentic-computer-use Desktop Look
+ {}
+ [image/jpeg 98kb (omitted)]
+ Screenshot: 1200×675px image (actual display: 1920×1080px). Specify x/y coordinates as pixel positions in this image (0,0 = top-left corner, 1200,675 = bottom-right). Coordinates are automatically scaled to screen
+ space.
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "58d65d17", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "fbf5698c", "name": "Recovery: send 5 LinkedIn connection requests to Cohere employees", "status": "failed", "agent_id": null, "items": [{"ordinal": 0, "title": "Navigate from the current LinkedIn page to
+ Cohere employee search results", "status": "active", "duration_s": null, "actions": 18}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending",
+ "duration_s": null, "actions": 0}, {"ordinal": 2, "title": "Report the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:19:02.120370+00:00", "last_update": "2026-05-02T04:23:34.884942+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "c8bf0298", "name": "Send 5 LinkedIn connection requests to Cohere employees", "status": "failed", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and navigate to Cohere employee
+ profiles", "status": "active", "duration_s": null, "actions": 29}, {"ordinal": 1, "title": "Send and verify 5 connection requests, confirming each becomes Pending", "status": "pending", "duration_s": null, "actions":
+ 0}, {"ordinal": 2, "title": "Summarize the 5 names connected with", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T04:17:16.014838+00:00", "last_update":
+ "2026-05-02T04:23:34.888174+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "8aaa6d67", "name": "Atomic LinkedIn recovery step", "status": "failed", "agent_id": null, "items": [{"ordinal": 0, "title": "Replace the current LinkedIn URL with a Cohere employee search URL", "status":
+ "active", "duration_s": null, "actions": 17}, {"ordinal": 1, "title": "Verify the Cohere results page loads", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:20:37.880986+00:00", "last_update": "2026-05-02T04:23:34.889978+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "86f9ec2f", "name": "Atomic LinkedIn recovery step 2", "status": "failed", "agent_id": null, "items": [{"ordinal": 0, "title": "Overwrite the partial address-bar text with the full Cohere employee search
+ URL", "status": "active", "duration_s": null, "actions": 10}, {"ordinal": 1, "title": "Verify the results page loads", "status": "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at":
+ "2026-05-02T04:22:03.958996+00:00", "last_update": "2026-05-02T04:23:34.890134+00:00"}
+
+
+I’m blocked on the “DETM ONLY” constraint.
+
+I used DETM gui_agent repeatedly, including smaller recovery steps, but it kept timing out and only partially editing the Firefox address bar. I was not able to reliably reach Cohere employee results, send 5 requests, or
+verify any button changed to Pending.
+
+So, result:
+- Connection requests sent: 0 verified
+- Names connected with: none
+
+If you want, I can do either of these next:
+1. Retry with non-DETM browser automation and finish the task reliably
+2. Keep DETM only, but you may need to manually reset the browser state first, then I’ll continue
+ connected | idle
+ agent main | session tui-03140e3a-2bea-4d72-8619-fb4e11ddf9b3 (openclaw-tui) | openai-codex/gpt-5.4 | think medium | verbose on | tokens 41k/200k (20%)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

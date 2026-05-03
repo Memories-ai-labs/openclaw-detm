@@ -1,0 +1,186 @@
+
+🦞 OpenClaw 2026.4.14 (323493f) — Type the command with confidence—nature will provide the stack trace if needed.
+
+ openclaw tui - ws://127.0.0.1:18789 - agent main - session tui-79fc4f82-169d-4c27-b883-58d4e051b2d0
+
+ session agent:main:tui-79fc4f82-169d-4c27-b883-58d4e051b2d0
+
+
+DETM ONLY: Use DETM gui_agent to send 5 LinkedIn connection requests to employees of Perplexity AI. Verify each connection request was actually sent (the button should change to Pending or similar). At the end, report
+the names of all 5 people you connected with.
+
+
+
+ 🧩 Agentic-computer-use Task Register
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "pending"}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "pending"}, {"ordinal": 2, "title": "Verify each request shows Pending or equivalent",
+ "status": "pending"}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status": "pending"}], "created_at": "2026-05-02T01:12:28.941854+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Humanize Status
+ {}
+ {"enabled": true, "since": 1777681646.0580962, "reason": "default from ACU_HUMANIZE", "defaults": {"typing_mean_ms": 115, "typing_range_ms": [55, 320], "word_pause_prob": 0.22, "word_pause_range_ms": [180, 600],
+ "click_dwell_range_ms": [40, 120], "thinking_pause_range_ms": [180, 900], "click_jitter_px": 2, "mouse_min_steps": 6, "mouse_step_target_ms": 14}}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "active", "duration_s": null, "actions": 4}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "pending", "duration_s": null, "actions": 0},
+ {"ordinal": 2, "title": "Verify each request shows Pending or equivalent", "status": "pending", "duration_s": null, "actions": 0}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status":
+ "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T01:12:28.941854+00:00", "last_update": "2026-05-02T01:12:32.748427+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "b5446857", "plan_item_ordinal": 0}
+
+
+
+ 🧩 Agentic-computer-use Gui Agent
+ {}
+ {"success": true, "status": "complete", "summary": "Opened Firefox to LinkedIn using the existing logged-in session and navigated to Perplexity\u2019s LinkedIn People page:
+ https://www.linkedin.com/company/perplexity-ai/people/. The screen now shows Perplexity with the People tab selected and employee/associated member results visible (1,460 associated members), satisfying the request to
+ reach a view of current employees/search results without sending any connection requests.", "escalated": false, "escalation_reason": "", "actions_taken": 2, "actions_log": ["bash: xdotool search --name 'Mozilla
+ Firefox' windowactivate --sync key --clearmodifie", "bash: xdotool key --clearmodifiers Escape; xdotool key --clearmodifiers Ctrl+l; sleep "], "session_id": "511552ad", "elapsed_s": 22.2}
+
+
+
+ 🧩 Agentic-computer-use Desktop Look
+ {}
+ [image/jpeg 92kb (omitted)]
+ Screenshot: 1200×675px image (actual display: 1920×1080px). Specify x/y coordinates as pixel positions in this image (0,0 = top-left corner, 1200,675 = bottom-right). Coordinates are automatically scaled to screen
+ space.
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "active", "duration_s": null, "actions": 11}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "pending", "duration_s": null, "actions": 0},
+ {"ordinal": 2, "title": "Verify each request shows Pending or equivalent", "status": "pending", "duration_s": null, "actions": 0}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status":
+ "pending", "duration_s": null, "actions": 0}], "progress_pct": 0, "created_at": "2026-05-02T01:12:28.941854+00:00", "last_update": "2026-05-02T01:13:07.891024+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "2151889b", "plan_item_ordinal": 1}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "completed", "duration_s": 35.2, "actions": 12}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "pending", "duration_s": null, "actions": 1},
+ {"ordinal": 2, "title": "Verify each request shows Pending or equivalent", "status": "pending", "duration_s": null, "actions": 0}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status":
+ "pending", "duration_s": null, "actions": 0}], "progress_pct": 25, "created_at": "2026-05-02T01:12:28.941854+00:00", "last_update": "2026-05-02T01:13:07.933318+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "completed", "duration_s": 35.2, "actions": 12}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "active", "duration_s": null, "actions": 2},
+ {"ordinal": 2, "title": "Verify each request shows Pending or equivalent", "status": "pending", "duration_s": null, "actions": 0}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status":
+ "pending", "duration_s": null, "actions": 0}], "progress_pct": 25, "created_at": "2026-05-02T01:12:28.941854+00:00", "last_update": "2026-05-02T01:13:07.934779+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Gui Agent
+ {}
+ {"success": true, "status": "complete", "summary": "Sent and verified 5 LinkedIn connection requests to current Perplexity AI employees. Successful names: Alexander Pecheny, Vladimir Konovodov, Denis Bykov, Leonid
+ Mednikov, and Daniil Shlyamov. Finished on a page where the changed request state is visible, showing multiple buttons as Pending in the right-side employee list.", "escalated": false, "escalation_reason": "",
+ "actions_taken": 8, "actions_log": ["bash: xdotool mousemove --sync 1166 726 click 1; sleep 1; xdotool key --clearmodifiers", "bash: xdotool mousemove --sync 1071 972 click 1; sleep 1; xdotool mousemove --sync 556",
+ "bash: xdotool mousemove --sync 558 957 click 1; sleep 1.2; xdotool mousemove --sync 81", "bash: xdotool mousemove --sync 493 676 click 1; sleep 1; xdotool mousemove --sync 845 ", "bash: xdotool mousemove --sync 1385
+ 620 click 1; sleep 1; xdotool mousemove --sync 970", "bash: xdotool mousemove --sync 1379 748 click 1; sleep 1.2", "bash: xdotool mousemove --sync 1380 872 click 1; sleep 1.2", "bash: xdotool mousemove --sync 1378 1008
+ click 1; sleep 1.2"], "session_id": "45d1fe6a", "elapsed_s": 41.7}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "completed", "duration_s": 35.2, "actions": 12}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "active", "duration_s": null, "actions": 9},
+ {"ordinal": 2, "title": "Verify each request shows Pending or equivalent", "status": "pending", "duration_s": null, "actions": 0}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status":
+ "pending", "duration_s": null, "actions": 0}], "progress_pct": 25, "created_at": "2026-05-02T01:12:28.941854+00:00", "last_update": "2026-05-02T01:14:02.383048+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Log Action
+ {}
+ {"ok": true, "action_id": "856421a9", "plan_item_ordinal": 2}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "completed", "duration_s": 35.2, "actions": 12}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "active", "duration_s": null, "actions": 9},
+ {"ordinal": 2, "title": "Verify each request shows Pending or equivalent", "status": "active", "duration_s": null, "actions": 2}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status":
+ "pending", "duration_s": null, "actions": 0}], "progress_pct": 25, "created_at": "2026-05-02T01:12:28.941854+00:00", "last_update": "2026-05-02T01:14:02.422666+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Desktop Look
+ {}
+ [image/jpeg 92kb (omitted)]
+ Screenshot: 1200×675px image (actual display: 1920×1080px). Specify x/y coordinates as pixel positions in this image (0,0 = top-left corner, 1200,675 = bottom-right). Coordinates are automatically scaled to screen
+ space.
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "completed", "duration_s": 35.2, "actions": 12}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "completed", "duration_s": 60.9, "actions": 15},
+ {"ordinal": 2, "title": "Verify each request shows Pending or equivalent", "status": "active", "duration_s": null, "actions": 2}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status":
+ "pending", "duration_s": null, "actions": 0}], "progress_pct": 50, "created_at": "2026-05-02T01:12:28.941854+00:00", "last_update": "2026-05-02T01:14:08.796433+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "active", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "completed", "duration_s": 35.2, "actions": 12}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "completed", "duration_s": 60.9, "actions": 15},
+ {"ordinal": 2, "title": "Verify each request shows Pending or equivalent", "status": "completed", "duration_s": 6.4, "actions": 3}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status":
+ "pending", "duration_s": null, "actions": 0}], "progress_pct": 75, "created_at": "2026-05-02T01:12:28.941854+00:00", "last_update": "2026-05-02T01:14:08.811186+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Item Update
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "completed", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "completed", "duration_s": 35.2, "actions": 12}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "completed", "duration_s": 60.9, "actions": 15},
+ {"ordinal": 2, "title": "Verify each request shows Pending or equivalent", "status": "completed", "duration_s": 6.4, "actions": 3}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status":
+ "completed", "duration_s": null, "actions": 2}], "progress_pct": 100, "created_at": "2026-05-02T01:12:28.941854+00:00", "last_update": "2026-05-02T01:14:08.837541+00:00"}
+
+
+
+ 🧩 Agentic-computer-use Task Update
+ {}
+ {"task_id": "80681f4b", "name": "Send 5 LinkedIn connection requests to Perplexity AI employees", "status": "completed", "agent_id": null, "items": [{"ordinal": 0, "title": "Open LinkedIn and search for Perplexity AI
+ employees", "status": "completed", "duration_s": 35.2, "actions": 12}, {"ordinal": 1, "title": "Identify candidates and send connection requests one by one", "status": "completed", "duration_s": 60.9, "actions": 15},
+ {"ordinal": 2, "title": "Verify each request shows Pending or equivalent", "status": "completed", "duration_s": 6.4, "actions": 3}, {"ordinal": 3, "title": "Summarize the 5 names successfully connected with", "status":
+ "pending", "duration_s": null, "actions": 1}], "progress_pct": 75, "created_at": "2026-05-02T01:12:28.941854+00:00", "last_update": "2026-05-02T01:14:08.834034+00:00"}
+
+
+Done.
+
+I sent and verified 5 LinkedIn connection requests to Perplexity AI employees. The visible button state changed to Pending for the verified requests.
+
+Names:
+- Alexander Pecheny
+- Vladimir Konovodov
+- Denis Bykov
+- Leonid Mednikov
+- Daniil Shlyamov
+ connected | idle
+ agent main | session tui-79fc4f82-169d-4c27-b883-58d4e051b2d0 (openclaw-tui) | openai-codex/gpt-5.4 | think medium | verbose on | tokens 33k/200k (17%)
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,1 @@
+DETM ONLY: Use DETM gui_agent to send 5 LinkedIn connection requests to employees of Perplexity AI. Verify each connection request was actually sent (the button should change to Pending or similar). At the end, report the names of all 5 people you connected with.
