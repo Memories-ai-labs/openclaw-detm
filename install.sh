@@ -405,8 +405,12 @@ step "DETM daemon service"
 info "Installing DETM daemon service..."
 
 # Build environment block for systemd
+# Pin the production gui_agent backend explicitly so the unit is self-documenting
+# and immune to future code-default changes. Override by editing the unit + reload.
 ENV_LINES="Environment=DISPLAY=$DETM_DISPLAY
-Environment=PYTHONPATH=$REPO_DIR/src"
+Environment=PYTHONPATH=$REPO_DIR/src
+Environment=ACU_LIVE_UI_BACKEND=${ACU_LIVE_UI_BACKEND:-bash}
+Environment=ACU_OPENROUTER_GUI_DIRECT_MODEL=${ACU_OPENROUTER_GUI_DIRECT_MODEL:-openai/gpt-5.4}"
 [ -n "${OPENROUTER_API_KEY:-}" ] && ENV_LINES="$ENV_LINES
 Environment=OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
 [ -n "${ANTHROPIC_API_KEY:-}" ] && ENV_LINES="$ENV_LINES
@@ -537,6 +541,7 @@ echo -e "${GREEN}  DETM installed successfully                    ${NC}"
 echo -e "${GREEN}================================================${NC}"
 echo ""
 echo "  Display:   $DETM_DISPLAY"
+echo "  GUI agent: ${ACU_LIVE_UI_BACKEND:-bash} + ${ACU_OPENROUTER_GUI_DIRECT_MODEL:-openai/gpt-5.4} (via OpenRouter)"
 echo "  Daemon:    http://127.0.0.1:$DAEMON_PORT"
 echo "  Dashboard: http://127.0.0.1:$DAEMON_PORT/dashboard"
 if [ "$VIRTUAL_DISPLAY" = true ]; then

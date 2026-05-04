@@ -345,6 +345,30 @@ Sections: `vision`, `gui-agent`, `keys`, `display`, `services`,
 unit (`/etc/systemd/system/detm-daemon.service`) and `~/.openclaw/openclaw.json`
 with `.bak` rotation; restarts the daemon automatically when it has sudo.
 
+## Inspecting a gui_agent session (post-mortem)
+
+When a `gui_agent` call returns `partial`, `failed`, `escalated`, or returns success but the result looks wrong, the daemon has already saved a full per-turn replay. The returned `session_id` is the key.
+
+Cheap-to-ingest skim (one line per turn, with bash command + frame ref):
+```
+python3 scripts/inspect_session.py <session_id> --compact
+python3 scripts/inspect_session.py latest --compact     # the most recent session
+```
+
+Full per-turn trace for a specific window (action + result + frame path):
+```
+python3 scripts/inspect_session.py <session_id> --turns 5-10
+```
+
+Pull a single frame's path so you can `Read` just that image into context — without ingesting every screenshot the model saw:
+```
+python3 scripts/inspect_session.py <session_id> --frame 7
+# → prints: /home/.../live_sessions/<sid>/frames/00007.jpg
+# → then: Read that path
+```
+
+Use this nested workflow (compact → zoom → frame) to verify what the bash sub-agent actually did, instead of trusting its summary. It's also how to debug "agent says success but result was wrong" — the per-turn frames are ground truth.
+
 ## Escalation scenarios
 
 - **Login / auth wall** — tell the user, use `smart_wait` to poll until they log in via VNC

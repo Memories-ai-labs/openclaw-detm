@@ -93,6 +93,29 @@ if [ "$AHEAD" -gt 0 ]; then
     ok "Now at $(git log -1 --format='%h %s' HEAD)"
 fi
 
+# ── 3.5. Audit existing systemd unit for stale env vars ─────────
+# When DETM rolled from supervised to bash + gpt-5.4 (May 2026), some installs
+# kept stale ACU_LIVE_UI_BACKEND / ACU_HOLO3_* / ACU_OPENROUTER_GUI_DIRECT_MODEL
+# values in their unit. Surface them so the user knows what's in effect — the
+# code default would be bash + openai/gpt-5.4 if these were absent.
+UNIT_FILE="/etc/systemd/system/detm-daemon.service"
+if [ -f "$UNIT_FILE" ]; then
+    UNIT_ENV=$(sudo -n grep -E '^Environment=ACU_(LIVE_UI_BACKEND|OPENROUTER_GUI_DIRECT_MODEL|HOLO3_|GUI_AGENT_BACKEND)' "$UNIT_FILE" 2>/dev/null || true)
+    if [ -n "$UNIT_ENV" ]; then
+        step "Existing systemd unit overrides for gui_agent backend:"
+        echo "$UNIT_ENV" | sed 's/^/    /'
+        # Warn on known-stale values
+        if echo "$UNIT_ENV" | grep -qE 'ACU_LIVE_UI_BACKEND=supervised'; then
+            warn "ACU_LIVE_UI_BACKEND=supervised is set — production default is bash. Re-run install.sh to reset, or edit $UNIT_FILE."
+        fi
+        if echo "$UNIT_ENV" | grep -qE '^Environment=ACU_HOLO3_'; then
+            warn "ACU_HOLO3_* found — Holo3 backend is no longer in master (lives on feat/multi-backend-gui-agent). Safe to remove."
+        fi
+    else
+        ok "No backend overrides in systemd unit (will use code defaults: bash + openai/gpt-5.4)"
+    fi
+fi
+
 # ── 4. Reinstall package (incremental) ───────────────────────────
 step "Updating Python package (incremental)"
 PIP_OUT=$("$VENV_DIR/bin/pip" install --disable-pip-version-check -e . 2>&1)
