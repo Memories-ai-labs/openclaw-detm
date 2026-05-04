@@ -47,6 +47,29 @@ DATA_DIR = Path(os.environ.get("ACU_DATA_DIR", os.path.expanduser("~/.agentic-co
 SESSIONS_DIR = DATA_DIR / "live_sessions"
 
 
+def _safe_load_events(path: Path) -> list[dict]:
+    """Read a JSONL file, skipping malformed lines.
+
+    The daemon can die mid-write (OOM kill, power loss), leaving a partial trailing
+    line. Without per-line tolerance, the inspector crashes for the one session you
+    most want to inspect.
+    """
+    out: list[dict] = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        pass
+    return out
+
+
 def list_sessions(limit: int = 20) -> None:
     if not SESSIONS_DIR.exists():
         print("No sessions directory found.")
@@ -60,12 +83,9 @@ def list_sessions(limit: int = 20) -> None:
         if not events_path.exists():
             continue
         mtime = events_path.stat().st_mtime
-        # Read first and last event for summary
-        lines = events_path.read_text().strip().split("\n")
-        first = json.loads(lines[0]) if lines else {}
-        last = json.loads(lines[-1]) if lines else {}
-        frame_count = sum(1 for l in lines if '"type": "frame"' in l or (json.loads(l) if l else {}).get("type") == "frame")
-        # Quick frame count from directory
+        events = _safe_load_events(events_path)
+        first = events[0] if events else {}
+        last = events[-1] if events else {}
         frames_dir = d / "frames"
         frame_count = len(list(frames_dir.glob("*.jpg"))) if frames_dir.exists() else 0
 
@@ -97,7 +117,12 @@ def resolve_session_id(sid: str) -> str:
         if not SESSIONS_DIR.exists():
             print("No sessions found.", file=sys.stderr)
             sys.exit(1)
-        latest = max(SESSIONS_DIR.iterdir(), key=lambda d: (d / "events.jsonl").stat().st_mtime if (d / "events.jsonl").exists() else 0)
+        candidates = [d for d in SESSIONS_DIR.iterdir()
+                      if d.is_dir() and (d / "events.jsonl").exists()]
+        if not candidates:
+            print("No sessions found.", file=sys.stderr)
+            sys.exit(1)
+        latest = max(candidates, key=lambda d: (d / "events.jsonl").stat().st_mtime)
         return latest.name
     # Allow prefix match
     if not (SESSIONS_DIR / sid).exists():
@@ -121,10 +146,10 @@ def compact_trajectory(sid: str) -> None:
     if not events_path.exists():
         print(f"No events.jsonl found for session {sid}", file=sys.stderr)
         sys.exit(1)
-    events = [json.loads(line) for line in open(events_path) if line.strip()]
+    events = _safe_load_events(events_path)
     if not events:
         return
-    start_ts = events[0]["ts"]
+    start_ts = events[0].get("ts", 0)
     print(f"SESSION: {sid}  (frames at {session_dir / 'frames'})")
     instr = next((e for e in events if e["type"] == "instruction"), None)
     if instr:
@@ -178,12 +203,7 @@ def inspect_session(sid: str, turn_range: str | None = None) -> None:
         print(f"No events.jsonl found for session {sid}", file=sys.stderr)
         sys.exit(1)
 
-    events = []
-    with open(events_path) as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                events.append(json.loads(line))
+    events = _safe_load_events(events_path)
 
     # Group events into turns: each turn = [model_text?, tool_call, grounding*, tool_response?, frame?]
     # Turn boundary = a new tool_call arrives (not model_text — bash backend rarely emits text).

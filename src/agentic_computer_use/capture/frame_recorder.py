@@ -98,11 +98,22 @@ async def create_video(task_id: str) -> bool:
 
 
 def recordings_size_bytes() -> int:
-    """Return total bytes used by all task recording directories."""
+    """Return total bytes used by all task recordings (MP4s + in-progress JPEG frames).
+
+    Completed tasks are encoded to <task_id>.mp4 and the JPEG frame dir is deleted, so
+    a JPG-only sum under-reports retained storage by the size of every encoded video.
+    """
     root = config.DATA_DIR / "recordings"
     if not root.exists():
         return 0
-    return sum(f.stat().st_size for f in root.rglob("*.jpg") if f.is_file())
+    total = 0
+    for f in root.rglob("*"):
+        if f.is_file() and f.suffix.lower() in (".jpg", ".mp4"):
+            try:
+                total += f.stat().st_size
+            except OSError:
+                pass
+    return total
 
 
 def prune_oldest_recordings(max_bytes: int) -> int:

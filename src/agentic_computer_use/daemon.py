@@ -10,6 +10,7 @@ import logging
 import os
 import pathlib
 import time
+from datetime import datetime, timezone
 from aiohttp import web
 
 from . import config, db, debug
@@ -545,7 +546,16 @@ _active_recordings: dict = {}  # task_id -> AsyncRecording
 
 # ─── Live UI session registry ────────────────────────────────────
 
+# Plain dict is safe here: aiohttp runs everything in one event loop, so reads and
+# writes to this map are not concurrent. If you ever add a worker thread, switch
+# to a per-key asyncio.Lock instead.
 _active_gui_sessions: dict[str, str] = {}  # task_id → session_id
+
+# Coarse lock for gui_agent calls without a task_id. Without this, two concurrent
+# untagged invocations both pass the per-task lock check (which requires task_id)
+# and fight over the same screen, scrambling UI state. Tagged calls are still
+# serialized by _active_gui_sessions on a per-task basis.
+_ungated_gui_lock = asyncio.Lock()
 
 
 # ─── Recording handlers ─────────────────────────────────────────
@@ -1163,7 +1173,12 @@ async def handle_gui_agent(request: web.Request) -> web.Response:
 
     if task_id:
         _active_gui_sessions[task_id] = session_id
+    # Untagged calls bypass _active_gui_sessions (which is keyed by task_id).
+    # Hold a coarse global lock so they don't race each other on the screen.
+    ungated_cm = _ungated_gui_lock if not task_id else None
     try:
+        if ungated_cm is not None:
+            await ungated_cm.acquire()
         result = await provider.run(
             instruction=instruction,
             timeout=timeout,
@@ -1175,6 +1190,8 @@ async def handle_gui_agent(request: web.Request) -> web.Response:
     finally:
         if task_id:
             _active_gui_sessions.pop(task_id, None)
+        if ungated_cm is not None and ungated_cm.locked():
+            ungated_cm.release()
 
     result["session_id"] = session_id
 
@@ -1371,6 +1388,20 @@ async def handle_api_live_session_audio_stream(request: web.Request) -> web.Stre
 WORKSPACE_DIR = os.environ.get("ACU_WORKSPACE", os.path.expanduser("~/.openclaw/workspace"))
 
 
+def _is_within_workspace(full_path: str) -> bool:
+    """True iff `full_path` is inside WORKSPACE_DIR.
+
+    Uses commonpath rather than startswith because startswith treats
+    /foo/workspace_evil as a subpath of /foo/workspace.
+    """
+    try:
+        ws = os.path.abspath(WORKSPACE_DIR)
+        fp = os.path.abspath(full_path)
+        return os.path.commonpath([fp, ws]) == ws
+    except (ValueError, OSError):
+        return False
+
+
 async def handle_memory_search(request: web.Request) -> web.Response:
     import glob, re
     args = await _parse_body(request)
@@ -1434,7 +1465,7 @@ async def handle_memory_read(request: web.Request) -> web.Response:
     limit = int(args.get("limit", 100))
 
     full_path = os.path.join(WORKSPACE_DIR, path)
-    if not os.path.abspath(full_path).startswith(os.path.abspath(WORKSPACE_DIR)):
+    if not _is_within_workspace(full_path):
         return web.json_response({"error": "path outside workspace"}, status=403)
     if not os.path.exists(full_path):
         return web.json_response({"error": f"file not found: {path}"}, status=404)
@@ -1452,7 +1483,6 @@ async def handle_memory_read(request: web.Request) -> web.Response:
 
 
 async def handle_memory_append(request: web.Request) -> web.Response:
-    from datetime import datetime, timezone
     args = await _parse_body(request)
     note = args.get("note", "").strip()
     path = args.get("path", "")
@@ -1462,7 +1492,7 @@ async def handle_memory_append(request: web.Request) -> web.Response:
 
     if path:
         full_path = os.path.join(WORKSPACE_DIR, path.lstrip("/"))
-        if not os.path.abspath(full_path).startswith(os.path.abspath(WORKSPACE_DIR)):
+        if not _is_within_workspace(full_path):
             return web.json_response({"error": "path outside workspace"}, status=403)
     else:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

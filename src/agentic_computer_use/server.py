@@ -25,7 +25,7 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "target": {"type": "string", "description": "What to watch. Prefer window:<name_or_id> so the model sees only one app (discover with desktop_action list_windows/find_window). Use screen to watch the entire desktop."},
+                "target": {"type": "string", "description": "What to watch. Prefer window:<name_or_id> so the model sees only one app (use desktop_look first to find window names). Use screen to watch the entire desktop."},
                 "wake_when": {"type": "string", "description": "Natural language condition to watch for (e.g., 'download completes or error dialog appears')"},
                 "timeout": {"type": "integer", "description": "Seconds before giving up. Default: 300", "default": 300},
                 "task_id": {"type": "string", "description": "Link this wait to a task (auto-posts update on resolution)"},

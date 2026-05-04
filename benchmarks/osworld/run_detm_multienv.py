@@ -214,8 +214,8 @@ def worker(task_queue, args, shared_scores):
         agent = DETMAgent()
 
         _sup = os.environ.get("ACU_OPENROUTER_LIVE_MODEL", "gemini-flash")
-_sup_short = _sup.rsplit("/", 1)[-1]
-MODEL_NAME = f"detm-{_sup_short}-uitars"
+        _sup_short = _sup.rsplit("/", 1)[-1]
+        MODEL_NAME = f"detm-{_sup_short}-uitars"
 
         env = DesktopEnv(
             provider_name=args.provider_name,
@@ -307,8 +307,8 @@ def main():
 
     args = config()
     _sup = os.environ.get("ACU_OPENROUTER_LIVE_MODEL", "gemini-flash")
-_sup_short = _sup.rsplit("/", 1)[-1]
-MODEL_NAME = f"detm-{_sup_short}-uitars"
+    _sup_short = _sup.rsplit("/", 1)[-1]
+    MODEL_NAME = f"detm-{_sup_short}-uitars"
 
     with open(args.test_all_meta_path) as f:
         test_all_meta = json.load(f)

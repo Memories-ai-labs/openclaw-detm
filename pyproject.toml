@@ -17,11 +17,11 @@ dependencies = [
     "einops>=0.7.0",
     "huggingface_hub>=0.20.0",
     "questionary>=2.0.1",
+    "python-dotenv>=1.0.0",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-asyncio"]
-docker = ["python-dotenv>=1.0.0"]
 
 [project.scripts]
 agentic-computer-use = "agentic_computer_use.server:main"

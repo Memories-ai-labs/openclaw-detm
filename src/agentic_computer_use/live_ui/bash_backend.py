@@ -28,8 +28,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import subprocess
 import time as _time
+import uuid as _uuid
 
 import httpx
 
@@ -155,56 +155,117 @@ _TOOLS = [
 ]
 
 
-def _run_bash(command: str, display: str, timeout: float = 10.0) -> dict:
+async def _run_bash(
+    command: str,
+    display: str,
+    timeout: float = 10.0,
+    cancel_event: asyncio.Event | None = None,
+) -> dict:
     """Run a shell command with DISPLAY pre-exported. Returns dict with stdout/stderr/exit_code.
 
-    Uses Popen + communicate(timeout) so we can kill the child on timeout. subprocess.run's
-    timeout handling raises but does NOT kill the child — orphan xdotool/sleep keeps running
-    and holds the display, blocking subsequent gui_agent calls. Decoder uses errors="replace"
-    so binary stdout (e.g. `scrot - | head`) doesn't crash the call into the bare except.
+    Async + cancel-aware: races subprocess completion against `cancel_event` and the
+    per-command timeout. On either, sends SIGKILL to the process group so backgrounded
+    xdotool/sleep dies too. Decoder uses errors="replace" so binary stdout doesn't crash.
+
+    exit_code conventions:
+       0..255   normal subprocess exit
+       -1       killed after per-command timeout
+       -2       killed by cancel_event
     """
-    proc: subprocess.Popen | None = None
     try:
-        proc = subprocess.Popen(
+        proc = await asyncio.create_subprocess_shell(
             command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             env={**os.environ, "DISPLAY": display},
-            start_new_session=True,  # so kill() reaches grandchildren too
+            start_new_session=True,  # so killpg reaches grandchildren too
         )
-        try:
-            stdout, stderr = proc.communicate(timeout=timeout)
-            return {
-                "stdout": (stdout or "")[:2000],
-                "stderr": (stderr or "")[:1000],
-                "exit_code": proc.returncode,
-            }
-        except subprocess.TimeoutExpired:
-            # Kill the process group so any backgrounded xdotool / sleep dies too.
-            try:
-                os.killpg(proc.pid, 9)
-            except (ProcessLookupError, PermissionError):
-                proc.kill()
-            try:
-                stdout, stderr = proc.communicate(timeout=2)
-            except subprocess.TimeoutExpired:
-                stdout, stderr = "", ""
-            return {
-                "stdout": (stdout or "")[:2000],
-                "stderr": ((stderr or "") + f"\n[killed after {timeout}s timeout]")[:1000],
-                "exit_code": -1,
-            }
     except Exception as e:
-        if proc is not None and proc.poll() is None:
-            try:
-                os.killpg(proc.pid, 9)
-            except (ProcessLookupError, PermissionError):
-                proc.kill()
         return {"stdout": "", "stderr": f"{type(e).__name__}: {e}", "exit_code": -1}
+
+    def _kill_group() -> None:
+        try:
+            os.killpg(os.getpgid(proc.pid), 9)
+        except (ProcessLookupError, PermissionError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+    comm_task = asyncio.ensure_future(proc.communicate())
+    waiters: list[asyncio.Future] = [comm_task]
+    cancel_task: asyncio.Task | None = None
+    if cancel_event is not None:
+        cancel_task = asyncio.ensure_future(cancel_event.wait())
+        waiters.append(cancel_task)
+
+    try:
+        done, _ = await asyncio.wait(waiters, timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+        _kill_group()
+        for w in waiters:
+            if not w.done():
+                w.cancel()
+        raise
+
+    cancelled = cancel_task is not None and cancel_task in done
+    timed_out = comm_task not in done and not cancelled
+
+    if cancelled or timed_out:
+        _kill_group()
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=2)
+        except (asyncio.TimeoutError, Exception):
+            stdout, stderr = b"", b""
+        if cancel_task is not None and not cancel_task.done():
+            cancel_task.cancel()
+        if not comm_task.done():
+            comm_task.cancel()
+        marker = "[cancelled]" if cancelled else f"[killed after {timeout}s timeout]"
+        return {
+            "stdout": (stdout or b"").decode("utf-8", errors="replace")[:2000],
+            "stderr": ((stderr or b"").decode("utf-8", errors="replace") + f"\n{marker}")[:1000],
+            "exit_code": -2 if cancelled else -1,
+        }
+
+    if cancel_task is not None and not cancel_task.done():
+        cancel_task.cancel()
+    try:
+        stdout, stderr = comm_task.result()
+    except Exception as e:
+        return {"stdout": "", "stderr": f"{type(e).__name__}: {e}", "exit_code": -1}
+    return {
+        "stdout": (stdout or b"").decode("utf-8", errors="replace")[:2000],
+        "stderr": (stderr or b"").decode("utf-8", errors="replace")[:1000],
+        "exit_code": proc.returncode if proc.returncode is not None else -1,
+    }
+
+
+async def _race_against_cancel(awaitable, cancel_event: asyncio.Event):
+    """Race `awaitable` against `cancel_event.wait()`.
+
+    Returns (result, cancelled). If cancel fired first, the underlying task is cancelled
+    and (None, True) is returned. If the awaitable completed (or raised), (result, False)
+    is returned — the caller can call .result() to get the value or re-raise the error.
+    """
+    main_task = asyncio.ensure_future(awaitable)
+    cancel_task = asyncio.ensure_future(cancel_event.wait())
+    try:
+        done, _ = await asyncio.wait({main_task, cancel_task}, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+        main_task.cancel()
+        cancel_task.cancel()
+        raise
+    if cancel_task in done:
+        main_task.cancel()
+        try:
+            await main_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        return None, True
+    if not cancel_task.done():
+        cancel_task.cancel()
+    return main_task, False
 
 
 class BashGuiProvider(LiveUIProvider):
@@ -230,7 +291,10 @@ class BashGuiProvider(LiveUIProvider):
             return {"error": err, "status": "error", "summary": err, "success": False,
                     "actions_taken": 0, "actions_log": []}
 
-        cancel_event = register_cancel_event(session.id if session else "no-session", task_id)
+        # Use a uuid-suffixed key when there's no session, so concurrent untagged calls
+        # don't collide on a shared "no-session" entry in the cancel registry.
+        cancel_key = session.id if session else f"no-session-{_uuid.uuid4().hex[:8]}"
+        cancel_event = register_cancel_event(cancel_key, task_id)
         sid = session.id[:8] if session else "--------"
         disp_w, disp_h = _get_display_size(display)
         _dbg.log("LIVE", f"[{sid}] bash[{self._label}] model={self._model} {disp_w}x{disp_h} task={task_id} timeout={timeout}s")
@@ -250,7 +314,6 @@ class BashGuiProvider(LiveUIProvider):
         actions_log: list[str] = []
         action_turns = 0
         format_retries = 0
-        last_data = None
 
         screenshot_b64, _ = await asyncio.get_running_loop().run_in_executor(
             None, _capture_jpeg_b64, display, session
@@ -281,8 +344,6 @@ class BashGuiProvider(LiveUIProvider):
                             _dbg.log("LIVE", f"[{sid}] cancelled at turn {turn_no}")
                             if session:
                                 session.record_error("cancelled externally")
-                            if last_data:
-                                _record_usage(self._model, task_id, last_data)
                             return {"success": False, "status": "cancelled",
                                     "summary": f"Cancelled at turn {turn_no}, actions={actions_taken}",
                                     "actions_taken": actions_taken, "actions_log": actions_log[-10:],
@@ -299,7 +360,7 @@ class BashGuiProvider(LiveUIProvider):
                                 m["content"] = [c for c in m["content"] if c.get("type") != "image_url"]
 
                         t0 = asyncio.get_running_loop().time()
-                        resp = await client.post(
+                        api_coro = client.post(
                             f"{self._base_url}/chat/completions",
                             headers={
                                 "Authorization": f"Bearer {self._api_key}",
@@ -315,7 +376,32 @@ class BashGuiProvider(LiveUIProvider):
                                 "max_tokens": 5000,
                             },
                         )
+                        # Race the API call against cancel so a click on cancel doesn't
+                        # have to wait the full httpx timeout (60s) before taking effect.
+                        api_task, was_cancelled = await _race_against_cancel(api_coro, cancel_event)
                         api_ms = (asyncio.get_running_loop().time() - t0) * 1000
+                        if was_cancelled:
+                            _dbg.log("LIVE", f"[{sid}] cancelled mid-API-call ({api_ms:.0f}ms)")
+                            if session:
+                                session.record_error("cancelled externally (mid-API)")
+                            return {"success": False, "status": "cancelled",
+                                    "summary": f"Cancelled mid-API at turn {turn_no}, actions={actions_taken}",
+                                    "actions_taken": actions_taken, "actions_log": actions_log[-10:],
+                                    "session_id": session.id if session else "",
+                                    "elapsed_s": round(_time.time() - t_start, 1)}
+                        try:
+                            resp = api_task.result()
+                        except (httpx.HTTPError, asyncio.TimeoutError) as e:
+                            err = f"API transport error: {type(e).__name__}: {e!s}"[:300]
+                            _dbg.log("LIVE", f"[{sid}] {err} ({api_ms:.0f}ms)")
+                            if session:
+                                session.record_error(err)
+                            return {"error": err, "status": "error",
+                                    "summary": f"GUI agent API error: {err[:200]}",
+                                    "success": False, "actions_taken": actions_taken,
+                                    "actions_log": actions_log[-10:],
+                                    "session_id": session.id if session else "",
+                                    "elapsed_s": round(_time.time() - t_start, 1)}
 
                         if resp.status_code != 200:
                             err = f"API HTTP {resp.status_code}: {resp.text[:300]}"
@@ -325,10 +411,26 @@ class BashGuiProvider(LiveUIProvider):
                             return {"error": err, "status": "error",
                                     "summary": f"GUI agent API error: {err[:200]}",
                                     "success": False, "actions_taken": actions_taken,
-                                    "actions_log": actions_log[-10:]}
+                                    "actions_log": actions_log[-10:],
+                                    "session_id": session.id if session else "",
+                                    "elapsed_s": round(_time.time() - t_start, 1)}
 
-                        data = resp.json()
-                        last_data = data
+                        try:
+                            data = resp.json()
+                        except (json.JSONDecodeError, ValueError) as e:
+                            err = f"API non-JSON response: {type(e).__name__}: {resp.text[:200]}"
+                            _dbg.log("LIVE", f"[{sid}] {err}")
+                            if session:
+                                session.record_error(err)
+                            return {"error": err, "status": "error",
+                                    "summary": f"GUI agent API error: {err[:200]}",
+                                    "success": False, "actions_taken": actions_taken,
+                                    "actions_log": actions_log[-10:],
+                                    "session_id": session.id if session else "",
+                                    "elapsed_s": round(_time.time() - t_start, 1)}
+                        # Record token usage for THIS turn — must be per-turn so multi-turn
+                        # sessions don't silently drop everything except the final response.
+                        _record_usage(self._model, task_id, data)
                         _dbg.log("LIVE", f"[{sid}] raw_response: {json.dumps(data)[:2000]}")
                         _usage = data.get("usage", {}) or {}
                         _ptd = _usage.get("prompt_tokens_details", {}) or {}
@@ -370,14 +472,21 @@ class BashGuiProvider(LiveUIProvider):
                         })
 
                         fn_name = tc["function"]["name"]
+                        # Some providers return null tool_call IDs — fall back to a synthesized
+                        # one so subsequent role:tool messages don't break the schema.
+                        tc_id = tc.get("id") or f"call_{turn_no}"
                         try:
                             fn_args = json.loads(tc["function"]["arguments"])
                         except Exception:
-                            messages.append({"role": "tool", "tool_call_id": tc["id"],
+                            messages.append({"role": "tool", "tool_call_id": tc_id,
                                              "content": "error: could not parse tool arguments — return valid JSON."})
                             format_retries += 1
                             continue
-                        tc_id = tc["id"]
+                        if not isinstance(fn_args, dict):
+                            messages.append({"role": "tool", "tool_call_id": tc_id,
+                                             "content": "error: tool arguments must be a JSON object, not an array or scalar."})
+                            format_retries += 1
+                            continue
 
                         if narration:
                             _dbg.log("LIVE", f"[{sid}] thought: {narration[:160]}")
@@ -394,7 +503,6 @@ class BashGuiProvider(LiveUIProvider):
                                 session.record_done(True, summary)
                             messages.append({"role": "tool", "tool_call_id": tc_id, "content": "ok"})
                             _dbg.log("LIVE", f"[{sid}] done: actions={actions_taken} -- {summary[:80]}")
-                            _record_usage(self._model, task_id, data)
                             return {"success": True, "status": "complete", "summary": summary,
                                     "escalated": False, "escalation_reason": "",
                                     "actions_taken": actions_taken, "actions_log": actions_log[-10:],
@@ -408,7 +516,6 @@ class BashGuiProvider(LiveUIProvider):
                                 session.record_done(True, f"PARTIAL: {summary} | remaining: {remaining}")
                             messages.append({"role": "tool", "tool_call_id": tc_id, "content": "ok"})
                             _dbg.log("LIVE", f"[{sid}] partial: {summary[:80]} | remaining: {remaining[:80]}")
-                            _record_usage(self._model, task_id, data)
                             return {"success": True, "status": "partial", "summary": summary,
                                     "remaining": remaining,
                                     "escalated": False, "escalation_reason": "",
@@ -429,7 +536,6 @@ class BashGuiProvider(LiveUIProvider):
                                 session.record_done(False, f"FAILED: {summary} | tried: {'; '.join(tried)}")
                             messages.append({"role": "tool", "tool_call_id": tc_id, "content": "ok"})
                             _dbg.log("LIVE", f"[{sid}] failed: {summary[:80]}")
-                            _record_usage(self._model, task_id, data)
                             return {"success": False, "status": "failed", "summary": summary, "tried": tried,
                                     "escalated": False, "escalation_reason": "",
                                     "actions_taken": actions_taken, "actions_log": actions_log[-10:],
@@ -442,7 +548,6 @@ class BashGuiProvider(LiveUIProvider):
                                 session.record_escalate(reason)
                             messages.append({"role": "tool", "tool_call_id": tc_id, "content": "ok"})
                             _dbg.log("LIVE", f"[{sid}] escalate: {reason[:120]}")
-                            _record_usage(self._model, task_id, data)
                             return {"success": False, "status": "escalated",
                                     "escalated": True, "escalation_reason": reason,
                                     "summary": f"Escalated: {reason}",
@@ -461,6 +566,10 @@ class BashGuiProvider(LiveUIProvider):
                                     {"type": "text", "text": "[fresh screenshot]"},
                                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{shot_b64}"}},
                                 ]})
+                            # Count screenshots toward action_turns so a model that loops on
+                            # screenshot() can't burn the whole timeout budget without ever
+                            # executing a real action.
+                            action_turns += 1
                             format_retries = 0
                             continue
 
@@ -483,9 +592,19 @@ class BashGuiProvider(LiveUIProvider):
                             actions_log.append(f"bash: {cmd[:80]}")
                             _dbg.log("LIVE", f"[{sid}] bash#{action_turns} (timeout={cmd_timeout}s): {cmd[:200]}")
 
-                            result = await asyncio.get_running_loop().run_in_executor(
-                                None, _run_bash, cmd, display, cmd_timeout
-                            )
+                            # Pass cancel_event so a dashboard cancel kills any in-flight
+                            # subprocess (e.g. `sleep 30`, hung X command) instead of waiting
+                            # for cmd_timeout. exit_code -2 indicates cancel.
+                            result = await _run_bash(cmd, display, cmd_timeout, cancel_event)
+                            if result["exit_code"] == -2:
+                                _dbg.log("LIVE", f"[{sid}] bash cancelled mid-execution")
+                                if session:
+                                    session.record_error("cancelled externally (mid-bash)")
+                                return {"success": False, "status": "cancelled",
+                                        "summary": f"Cancelled mid-bash at turn {turn_no}, actions={actions_taken}",
+                                        "actions_taken": actions_taken, "actions_log": actions_log[-10:],
+                                        "session_id": session.id if session else "",
+                                        "elapsed_s": round(_time.time() - t_start, 1)}
                             actions_taken += 1
                             _dbg.log(
                                 "LIVE",
@@ -521,8 +640,6 @@ class BashGuiProvider(LiveUIProvider):
                         continue
 
                     _dbg.log("LIVE", f"[{sid}] turn budget exhausted (turns={turn_no} actions={actions_taken})")
-                    if last_data:
-                        _record_usage(self._model, task_id, last_data)
                     return {"success": False, "status": "partial",
                             "summary": f"Turn budget exhausted after {actions_taken} bash calls",
                             "remaining": "model never called a terminal tool",
@@ -532,8 +649,6 @@ class BashGuiProvider(LiveUIProvider):
 
             except asyncio.TimeoutError:
                 _dbg.log("LIVE", f"[{sid}] hard timeout after {timeout}s actions={actions_taken}")
-                if last_data:
-                    _record_usage(self._model, task_id, last_data)
                 return {"success": False, "status": "partial",
                         "summary": f"Hit {timeout}s timeout after {actions_taken} bash calls",
                         "remaining": (actions_log[-1] if actions_log else "") + " — caller should resume",
@@ -543,7 +658,7 @@ class BashGuiProvider(LiveUIProvider):
                         "elapsed_s": round(_time.time() - t_start, 1)}
         finally:
             # Always release the cancel-event registry entry so it doesn't leak across runs.
-            unregister_cancel_event(session.id if session else "no-session", task_id)
+            unregister_cancel_event(cancel_key, task_id)
 
 
 def openrouter_bash_provider() -> BashGuiProvider:
