@@ -92,8 +92,7 @@ if [ -z "${OPENROUTER_API_KEY:-}" ]; then
     warn "OPENROUTER_API_KEY is not set."
     echo ""
     echo "  DETM needs an OpenRouter API key for:"
-    echo "    - GUI agent (Gemini Flash supervisor)"
-    echo "    - UI-TARS grounding (precise cursor placement)"
+    echo "    - GUI agent (${ACU_OPENROUTER_GUI_DIRECT_MODEL:-openai/gpt-5.4} via OpenRouter chat-completions)"
     echo "    - Smart Wait (cloud vision screen polling)"
     echo ""
     echo "  Get one free at: https://openrouter.ai/keys"
@@ -112,16 +111,19 @@ if [ -z "${OPENROUTER_API_KEY:-}" ]; then
     fi
 fi
 
-# Validate the API key works
+# Validate the API key works against the actual production model. Some keys have
+# per-model allowlists, so a key that authenticates against gemini may still fail
+# on gpt-5.4. Probe the model we'll actually use.
 if [ -n "${OPENROUTER_API_KEY:-}" ]; then
-    info "Validating OpenRouter API key..."
+    PROD_MODEL="${ACU_OPENROUTER_GUI_DIRECT_MODEL:-openai/gpt-5.4}"
+    info "Validating OpenRouter API key against $PROD_MODEL..."
     _OR_RESP=$(curl -s -m 15 -w "\n%{http_code}" -X POST https://openrouter.ai/api/v1/chat/completions \
         -H "Authorization: Bearer $OPENROUTER_API_KEY" \
         -H "Content-Type: application/json" \
-        -d '{"model":"google/gemini-2.0-flash-lite-001","messages":[{"role":"user","content":"hi"}],"max_tokens":1}' 2>/dev/null)
+        -d "{\"model\":\"$PROD_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}" 2>/dev/null)
     _OR_STATUS=$(echo "$_OR_RESP" | tail -1)
     if [ "$_OR_STATUS" = "200" ]; then
-        ok "OpenRouter API key is valid"
+        ok "OpenRouter API key is valid for $PROD_MODEL"
     else
         _OR_BODY=$(echo "$_OR_RESP" | head -1)
         err "OpenRouter API key validation failed (HTTP $_OR_STATUS)"
@@ -404,6 +406,30 @@ step "DETM daemon service"
 
 info "Installing DETM daemon service..."
 
+# Non-secret config (display, paths, backend pinning) lives in the unit as
+# Environment= so the unit is self-documenting. Secrets (API keys) go into a
+# 0600 EnvironmentFile so the world-readable unit doesn't carry them.
+#
+# Re-install behavior: only overwrite /etc/detm/env if at least one key is
+# present in the shell. Otherwise preserve the existing file so a re-install
+# without keys re-sourced doesn't wipe credentials from a prior install.
+ENV_FILE="/etc/detm/env"
+ENV_LINES_OUT=()
+[ -n "${OPENROUTER_API_KEY:-}" ] && ENV_LINES_OUT+=("OPENROUTER_API_KEY=$OPENROUTER_API_KEY")
+[ -n "${ANTHROPIC_API_KEY:-}"  ] && ENV_LINES_OUT+=("ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
+[ -n "${MAVI_API_KEY:-}"       ] && ENV_LINES_OUT+=("MAVI_API_KEY=$MAVI_API_KEY")
+[ -n "${GEMINI_API_KEY:-}"     ] && ENV_LINES_OUT+=("GEMINI_API_KEY=$GEMINI_API_KEY")
+if [ ${#ENV_LINES_OUT[@]} -gt 0 ]; then
+    sudo mkdir -p "$(dirname "$ENV_FILE")"
+    printf '%s\n' "${ENV_LINES_OUT[@]}" | sudo tee "$ENV_FILE" > /dev/null
+    sudo chmod 0600 "$ENV_FILE"
+    sudo chown root:root "$ENV_FILE"
+elif [ -f "$ENV_FILE" ]; then
+    info "No keys in shell env — preserving existing $ENV_FILE from prior install."
+else
+    warn "No API keys in shell env and no $ENV_FILE — daemon will start without keys. Re-run with OPENROUTER_API_KEY=... bash."
+fi
+
 # Build environment block for systemd
 # Pin the production gui_agent backend explicitly so the unit is self-documenting
 # and immune to future code-default changes. Override by editing the unit + reload.
@@ -411,12 +437,6 @@ ENV_LINES="Environment=DISPLAY=$DETM_DISPLAY
 Environment=PYTHONPATH=$REPO_DIR/src
 Environment=ACU_LIVE_UI_BACKEND=${ACU_LIVE_UI_BACKEND:-bash}
 Environment=ACU_OPENROUTER_GUI_DIRECT_MODEL=${ACU_OPENROUTER_GUI_DIRECT_MODEL:-openai/gpt-5.4}"
-[ -n "${OPENROUTER_API_KEY:-}" ] && ENV_LINES="$ENV_LINES
-Environment=OPENROUTER_API_KEY=$OPENROUTER_API_KEY"
-[ -n "${ANTHROPIC_API_KEY:-}" ] && ENV_LINES="$ENV_LINES
-Environment=ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY"
-[ -n "${MAVI_API_KEY:-}" ] && ENV_LINES="$ENV_LINES
-Environment=MAVI_API_KEY=$MAVI_API_KEY"
 
 sudo tee /etc/systemd/system/detm-daemon.service > /dev/null <<SVCEOF
 [Unit]
@@ -428,6 +448,7 @@ Wants=detm-xvfb.service
 Type=simple
 User=$(whoami)
 $ENV_LINES
+EnvironmentFile=-$ENV_FILE
 WorkingDirectory=$REPO_DIR
 ExecStart=$VENV_DIR/bin/python3 -m agentic_computer_use.daemon
 Restart=on-failure
@@ -527,7 +548,19 @@ step "Health check"
 
 info "Running health check..."
 HEALTH=$(curl -s "http://127.0.0.1:$DAEMON_PORT/health" 2>/dev/null || echo '{}')
-if echo "$HEALTH" | grep -q '"ok"'; then
+# Parse the actual JSON instead of grepping — the substring "ok" can match field
+# names ("ok": false) or appear inside an error message, falsely passing the check.
+HEALTH_OK=$("$PYTHON" -c "
+import json, sys
+try:
+    d = json.loads(sys.argv[1])
+except Exception:
+    sys.exit(1)
+if d.get('ok') is True:
+    sys.exit(0)
+sys.exit(1)
+" "$HEALTH" 2>/dev/null && echo yes || echo no)
+if [ "$HEALTH_OK" = "yes" ]; then
     ok "Health check passed"
 else
     warn "Health check failed — daemon may still be starting"

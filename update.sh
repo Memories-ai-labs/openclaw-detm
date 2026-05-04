@@ -114,6 +114,15 @@ if [ -f "$UNIT_FILE" ]; then
     else
         ok "No backend overrides in systemd unit (will use code defaults: bash + openai/gpt-5.4)"
     fi
+
+    # Hardening: API keys should live in /etc/detm/env (chmod 0600) rather than the
+    # world-readable systemd unit. Older installs have inline Environment=*_API_KEY=...;
+    # update.sh leaves them alone (functional), but flag the migration opportunity.
+    if sudo -n grep -qE '^Environment=(OPENROUTER_API_KEY|ANTHROPIC_API_KEY|MAVI_API_KEY|GEMINI_API_KEY)=' "$UNIT_FILE" 2>/dev/null; then
+        if ! sudo -n grep -q '^EnvironmentFile=' "$UNIT_FILE" 2>/dev/null; then
+            warn "API keys are inline in $UNIT_FILE (world-readable). Re-run ./install.sh once to migrate to /etc/detm/env (chmod 0600)."
+        fi
+    fi
 fi
 
 # ── 4. Reinstall package (incremental) ───────────────────────────

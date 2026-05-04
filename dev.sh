@@ -36,7 +36,6 @@ build_run_cmd() {
     )
     local passthrough_vars=(
         ACU_DATA_DIR
-        ACU_OPENROUTER_API_KEY
         ACU_OPENROUTER_LIVE_MODEL
         ACU_OPENROUTER_VISION_MODEL
         ACU_VISION_BACKEND
@@ -109,8 +108,8 @@ cmd_status() {
 }
 
 ensure_virtual_desktop() {
-    # Virtual desktop services required for :99 display
-    local services=("xvfb-99" "xfce4-99" "xfwm4-99" "x11vnc-99" "novnc-99")
+    # Match the service names install.sh creates (detm-* family).
+    local services=("detm-xvfb" "detm-desktop" "detm-vnc" "detm-novnc")
     local started=0
 
     for svc in "${services[@]}"; do
@@ -132,10 +131,19 @@ ensure_virtual_desktop() {
         sleep 3  # give XFCE time to initialize
     fi
 
-    if systemctl is-active --quiet xvfb-99 2>/dev/null; then
-        ok "Virtual desktop :99 is running  (VNC → port 5999)"
+    if systemctl is-active --quiet detm-xvfb 2>/dev/null; then
+        ok "Virtual desktop :99 is running"
     else
-        color "33" "  Warning: Xvfb :99 not running — live screen may be unavailable"
+        color "33" "  Warning: detm-xvfb not running — live screen may be unavailable"
+    fi
+}
+
+ensure_no_systemd_daemon() {
+    # The systemd-managed detm-daemon and dev.sh's tmux daemon both bind port 18790.
+    # If the unit is running, stop it so they don't fight over the port.
+    if systemctl is-active --quiet detm-daemon 2>/dev/null; then
+        info "Stopping systemd detm-daemon (dev mode runs the daemon in tmux instead)..."
+        sudo systemctl stop detm-daemon 2>/dev/null || true
     fi
 }
 
@@ -144,6 +152,7 @@ source "$REPO_DIR/scripts/deploy-agents.sh"
 
 cmd_start() {
     ensure_virtual_desktop
+    ensure_no_systemd_daemon
     deploy_agents
 
     if session_running; then
