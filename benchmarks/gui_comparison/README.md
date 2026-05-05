@@ -61,12 +61,58 @@ Results land in `results/<run_id>/<family>__<model>/<task_id>/`:
 
 - [x] Branch + clear old infra
 - [x] Define 15 task YAMLs
-- [ ] Hand-verify task 1 in browser (sanity check)
-- [ ] Common runner scaffolding
-- [ ] Model-as-judge
-- [ ] Family B runner (DETM via OpenClaw TUI)
-- [ ] Smoke run on tasks 1+6
-- [ ] Family A runner (Playwright MCP)
-- [ ] Scope Family C (Agent S3 already cloned at `../baselines/agent-s/`)
-- [ ] Full sweep
-- [ ] Aggregate + writeup
+- [x] Common runner scaffolding (`runners/base.py`)
+- [x] Model-as-judge (claude-haiku-4-5 via OpenRouter)
+- [x] Family B runner — DETM via OpenClaw TUI (smoke: task 14, task 6)
+- [x] Family A runner — Playwright MCP (smoke: task 14)
+- [x] Family C runner — Agent S3 (smoke: task 14)
+- [x] Aggregator — `analysis/aggregate.py` writes summary.csv,
+       summary_by_model.csv, summary.md per run id
+- [ ] Full sweep across all 15 tasks × all family/model combos
+- [ ] Final writeup
+
+## Setup once per machine
+
+The runners assume a few external pieces are in place:
+
+```bash
+# 1. Python deps
+pip install -e .                                       # repo's main pkg
+pip install anthropic httpx pyyaml mcp                 # judge + MCP client
+pip install -r benchmarks/baselines/agent-s/requirements.txt  # skip paddle
+
+# 2. Playwright's chrome-for-testing build (for Family A)
+npx @playwright/mcp@latest install-browser chrome-for-testing
+
+# 3. A logged-in Chromium profile for tier-1 LinkedIn tasks (Family A)
+#    Open a Chromium with the bench profile dir and log in once:
+mkdir -p ~/.bench-chromium-profile
+chromium --user-data-dir=$HOME/.bench-chromium-profile  &
+# (then log in to LinkedIn manually — cookies persist across runs)
+
+# 4. A tmux session running an OpenClaw TUI (for Family B)
+tmux new-session -d -s bench-oc -x 220 -y 60
+tmux send-keys  -t bench-oc "openclaw tui --session bench-fresh" Enter
+
+# 5. DETM daemon reachable at http://127.0.0.1:18790, configured for the
+#    gui_agent model under test (bash backend, openai/gpt-5.4 by default).
+```
+
+## Run
+
+```bash
+# All families × one model × one task
+BENCH_TMUX_SESSION=bench-oc \
+  python benchmarks/gui_comparison/run_benchmark.py \
+    --family detm --family playwright_mcp --family agent_s \
+    --models openai/gpt-5.4 --tasks 14 --run-id my-smoke
+
+# Full sweep
+BENCH_TMUX_SESSION=bench-oc \
+  python benchmarks/gui_comparison/run_benchmark.py \
+    --family detm --family playwright_mcp --family agent_s \
+    --models openai/gpt-5.4 --tasks all --run-id full-2026-05-05
+
+# Aggregate
+python -m gui_comparison.analysis.aggregate full-2026-05-05
+```
