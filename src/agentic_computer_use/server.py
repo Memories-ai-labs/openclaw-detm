@@ -255,39 +255,6 @@ TOOLS = [
         },
     ),
     Tool(
-        name="mavi_understand",
-        description=(
-            "Record the screen for a few seconds and ask MAVI (a video intelligence model) "
-            "a question about what it sees and hears. Use this when you are on a video-heavy UI "
-            "and need to understand content that cannot be read from a static screenshot — "
-            "e.g. what sound is playing on a TikTok video, what format or style a video uses, "
-            "what text appears in an animation, or what is happening in a live feed. "
-            "MAVI can process both visual and audio content. "
-            "Returns a text answer from the model."
-        ),
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "task_id": {"type": "string", "description": "Task ID — links this action to the active task log"},
-                "duration_seconds": {
-                    "type": "integer",
-                    "description": "How many seconds to record. 5–15s is usually enough. Max 60.",
-                    "default": 10,
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": (
-                        "What you want to know from the video. Be specific. "
-                        "Examples: 'What is the name of the sound playing in this TikTok video?', "
-                        "'What hashtags are shown in the captions of the videos on screen?', "
-                        "'Describe the visual format and style of the content currently playing.'"
-                    ),
-                },
-            },
-            "required": ["prompt"],
-        },
-    ),
-    Tool(
         name="health_check",
         description=(
             "End-to-end DETM health report. Returns a structured list of checks across "
@@ -392,7 +359,6 @@ ROUTE_MAP = {
     "gui_agent": ("POST", "/gui_agent"),
     "desktop_look": ("POST", "/desktop_look"),
     "video_record": ("POST", "/video_record"),
-    "mavi_understand": ("POST", "/mavi_understand"),
     "memory_search": ("POST", "/memory_search"),
     "memory_read": ("POST", "/memory_read"),
     "memory_append": ("POST", "/memory_append"),

@@ -261,9 +261,6 @@ If reality diverges from the plan, use `task_item_update(status="scrapped")` + `
 - `desktop_look` — screenshot returned as image (you interpret it)
 - `video_record` — record screen/window clip
 
-### Video Intelligence
-- `mavi_understand` — record screen, ask a question about the video (for audio/motion content like TikTok sounds, animations, live feeds). **Requires `MAVI_API_KEY` to be set** — will fail without it.
-
 ### System
 - `health_check` — full DETM diagnostic (see **Doctor & narration** below)
 - `humanize_status`, `humanize_set` — GUI humanization flag (see **Humanization** below)

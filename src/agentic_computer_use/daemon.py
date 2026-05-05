@@ -1089,34 +1089,6 @@ async def handle_video_record(request: web.Request) -> web.Response:
     return web.json_response({"error": "Recording failed"}, status=500)
 
 
-# ─── MAVI video understanding ───────────────────────────────────
-
-async def handle_mavi_understand(request: web.Request) -> web.Response:
-    args = await _parse_body(request)
-    task_id = args.get("task_id")
-    duration = args.get("duration_seconds", 10)
-    prompt = args.get("prompt")
-
-    if not prompt:
-        return web.json_response({"error": "prompt is required"}, status=400)
-
-    from . import mavi
-    result = await mavi.record_and_understand(
-        prompt=prompt,
-        duration_seconds=duration,
-        task_id=task_id,
-    )
-
-    if task_id and "answer" in result:
-        await task_mgr.log_action(
-            task_id, "vision",
-            f"mavi_understand ({result['duration_recorded']}s): {prompt[:100]}",
-            output_data=result["answer"][:500],
-        )
-
-    return web.json_response(result)
-
-
 # ─── GUI Agent (unified: Gemini supervisor + UI-TARS grounding) ─
 
 async def handle_gui_agent(request: web.Request) -> web.Response:
@@ -1551,7 +1523,6 @@ def create_app() -> web.Application:
     app.router.add_post("/desktop_look", handle_desktop_look)
     app.router.add_post("/desktop_action", handle_desktop_action)
     app.router.add_post("/video_record", handle_video_record)
-    app.router.add_post("/mavi_understand", handle_mavi_understand)
     # GUI agent (unified)
     app.router.add_post("/gui_agent", handle_gui_agent)
     app.router.add_post("/gui_agent/cancel", handle_gui_agent_cancel)
