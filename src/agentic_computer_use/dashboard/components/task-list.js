@@ -9,7 +9,7 @@ const TaskList = (() => {
   let _onDelete = null;
   let _onDownload = null;
 
-  // task_id → session_id for currently-running live_ui sessions
+  // task_id → {session_id, started_at, instruction} for currently-running live_ui sessions
   let _activeSessions = {};
 
   async function _pollActiveSessions() {
@@ -65,7 +65,8 @@ const TaskList = (() => {
         ? `<span class="badge badge-agent">${_esc(task.agent_id)}</span>`
         : "";
 
-      const liveSessionId = _activeSessions[task.task_id];
+      const liveSessionRec = _activeSessions[task.task_id];
+      const liveSessionId = liveSessionRec && liveSessionRec.session_id;
 
       li.innerHTML = `
         <div class="task-list-row">
