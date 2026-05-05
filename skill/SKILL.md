@@ -436,6 +436,27 @@ if anything looks broken (working tree dirty, venv missing, etc.).
 When in doubt, `./install.sh` does the same thing — slower but more
 thorough (re-runs apt installs, recreates services from scratch).
 
+**Reload OpenClaw after the pull touched server.py or SKILL.md.**
+`update.sh` only restarts the DETM daemon. The OpenClaw gateway still
+holds the previous MCP tool list and the previous SKILL.md until you
+reload it. Tell the user the in-flight session will pick up the new
+code on next prompt:
+
+```
+systemctl --user restart openclaw-gateway   # full reload (drops sessions)
+# OR, gentler — soft-reload SKILL.md without dropping the session:
+kill -HUP $(pgrep -f openclaw-gateway | head -1)
+```
+
+If you only changed daemon-internal code (bash_backend, daemon.py,
+live_ui/*, capture/*), `update.sh`'s daemon restart is sufficient —
+no gateway reload needed.
+
+**If `update.sh` warns about inline API keys in the systemd unit**,
+that's the one-time EnvironmentFile migration. Run `./install.sh`
+once to move the keys into `/etc/detm/env` (chmod 0600). Functional
+behavior is identical either way; this is just a hardening step.
+
 ### Status / health check
 
 ```
