@@ -54,33 +54,6 @@ HEADLESS = os.environ.get("BENCH_PLAYWRIGHT_HEADLESS", "0") == "1"
 
 # ── MCP client glue (async) ──────────────────────────────────────────────
 
-async def _start_playwright_mcp(profile_dir: Path):
-    """Spawn @playwright/mcp over stdio. Returns (ClientSession, exit_stack).
-
-    Caller MUST `await exit_stack.aclose()` to clean up.
-    """
-    from mcp import ClientSession, StdioServerParameters
-    from mcp.client.stdio import stdio_client
-    from contextlib import AsyncExitStack
-
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    server = StdioServerParameters(
-        command="npx",
-        args=[
-            "-y", "@playwright/mcp",
-            "--browser", "chromium",
-            "--user-data-dir", str(profile_dir),
-            "--no-headless",
-        ],
-        env={**os.environ, "DISPLAY": DISPLAY},
-    )
-    stack = AsyncExitStack()
-    read, write = await stack.enter_async_context(stdio_client(server))
-    session = await stack.enter_async_context(ClientSession(read, write))
-    await session.initialize()
-    return session, stack
-
-
 def _mcp_tool_to_openai(mcp_tool) -> dict:
     """Convert an MCP tool description to OpenAI-compatible tool format."""
     return {
@@ -111,7 +84,12 @@ def _summarize_tool_result(result) -> str:
 
 # ── Runner ───────────────────────────────────────────────────────────────
 
-_DONE_MARKERS = ("__DONE__", "BENCH_END_", "FINAL ANSWER:")
+# Once the conversation grows beyond this many entries (system + user +
+# assistant turns + tool results), we replace the OLDEST tool results with
+# "[truncated]" placeholders to keep the prompt within OpenRouter's per-
+# request token budget. We never drop assistant turns (model needs its
+# own history to stay coherent).
+_MESSAGE_HISTORY_HARD_CAP = 80
 
 
 class PlaywrightMCPRunner(RunnerBase):
@@ -222,133 +200,147 @@ class PlaywrightMCPRunner(RunnerBase):
             # 4) Tool loop ---------------------------------------------
             final_text = ""
             termination = "completed"
-            client = httpx.AsyncClient(timeout=120.0)
-
-            while True:
-                if time.time() > deadline:
-                    termination = "timeout"
-                    break
-                if n_tool_calls >= task.max_actions:
-                    termination = "max_actions"
-                    break
-
-                # Call OpenRouter
-                try:
-                    or_resp = await client.post(
-                        OPENROUTER_URL,
-                        headers={
-                            "Authorization": f"Bearer {self.api_key}",
-                            "Content-Type": "application/json",
-                            "HTTP-Referer": "https://github.com/anthropics/openclaw",
-                            "X-Title": "DETM-bench-gui-comparison",
-                        },
-                        json={
-                            "model": self.model,
-                            "messages": messages,
-                            "tools": openai_tools,
-                            "tool_choice": "auto",
-                            "max_tokens": 4096,
-                        },
-                    )
-                except Exception as e:
-                    termination = "error"
-                    final_text = f"OpenRouter call failed: {e}"
-                    break
-                if or_resp.status_code != 200:
-                    termination = "error"
-                    final_text = (
-                        f"OpenRouter HTTP {or_resp.status_code}: {or_resp.text[:500]}"
-                    )
-                    break
-                data = or_resp.json()
-                usage = data.get("usage", {}) or {}
-                prompt_tokens_total += int(usage.get("prompt_tokens", 0))
-                completion_tokens_total += int(usage.get("completion_tokens", 0))
-                choices = data.get("choices") or []
-                if not choices:
-                    termination = "error"
-                    final_text = f"OpenRouter returned no choices: {data}"
-                    break
-                msg = choices[0].get("message", {}) or {}
-                n_assistant_messages += 1
-                # Track reasoning if present (some models on OpenRouter
-                # surface reasoning_content / thinking).
-                reasoning = msg.get("reasoning") or msg.get("reasoning_content") or ""
-                if isinstance(reasoning, list):
-                    reasoning = "\n".join(
-                        r.get("text", "") if isinstance(r, dict) else str(r)
-                        for r in reasoning
-                    )
-                if reasoning:
-                    thinking_chars += len(reasoning)
-
-                # Append assistant turn (preserving tool_calls for context).
-                assistant_entry: dict[str, Any] = {
-                    "role": "assistant",
-                    "content": msg.get("content") or "",
-                }
-                if msg.get("tool_calls"):
-                    assistant_entry["tool_calls"] = msg["tool_calls"]
-                messages.append(assistant_entry)
-                messages_log.append({
-                    "role": "assistant",
-                    "content": msg.get("content") or "",
-                    "tool_calls": msg.get("tool_calls"),
-                    "reasoning_chars": len(reasoning) if reasoning else 0,
-                })
-
-                tool_calls = msg.get("tool_calls") or []
-                if not tool_calls:
-                    final_text = msg.get("content") or ""
-                    termination = "completed"
-                    break
-
-                # 4a) Dispatch tool calls
-                for tc in tool_calls:
+            # `async with` ensures the connection pool is released even if
+            # an unhandled exception bubbles out of the loop body.
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                while True:
                     if time.time() > deadline:
+                        termination = "timeout"
                         break
-                    n_tool_calls += 1
-                    fn = tc.get("function") or {}
-                    name = fn.get("name", "")
-                    args_raw = fn.get("arguments") or "{}"
-                    try:
-                        args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
-                    except json.JSONDecodeError:
-                        args = {}
-                    call_t0 = time.time()
-                    try:
-                        result = await session.call_tool(name, args)
-                        result_text = _summarize_tool_result(result)
-                        ok = not getattr(result, "isError", False)
-                    except Exception as e:
-                        result_text = f"tool error: {e}"
-                        ok = False
-                    call_dt = time.time() - call_t0
-
-                    actions_log.append({
-                        "n": n_tool_calls,
-                        "tool": name,
-                        "args": args,
-                        "ok": ok,
-                        "result_chars": len(result_text),
-                        "latency_s": round(call_dt, 3),
-                    })
-
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id"),
-                        "name": name,
-                        "content": result_text,
-                    })
-                    messages_log.append({
-                        "role": "tool",
-                        "name": name,
-                        "content_chars": len(result_text),
-                    })
-
-                    # Cap per-task tool calls.
                     if n_tool_calls >= task.max_actions:
+                        termination = "max_actions"
                         break
+
+                    # If the conversation has grown past the cap, replace the
+                    # OLDEST tool result contents with "[truncated]" — keep
+                    # the structure (role/tool_call_id) so the model's tool-
+                    # use trace stays self-consistent.
+                    if len(messages) > _MESSAGE_HISTORY_HARD_CAP:
+                        for m in messages[1:-_MESSAGE_HISTORY_HARD_CAP // 2]:
+                            if m.get("role") == "tool" and m.get("content") != "[truncated]":
+                                m["content"] = "[truncated]"
+
+                    # Call OpenRouter
+                    try:
+                        or_resp = await client.post(
+                            OPENROUTER_URL,
+                            headers={
+                                "Authorization": f"Bearer {self.api_key}",
+                                "Content-Type": "application/json",
+                                "HTTP-Referer": "https://detm.local/bench",
+                                "X-Title": "DETM-bench-gui-comparison",
+                            },
+                            json={
+                                "model": self.model,
+                                "messages": messages,
+                                "tools": openai_tools,
+                                "tool_choice": "auto",
+                                "max_tokens": 4096,
+                            },
+                        )
+                    except Exception as e:
+                        termination = "error"
+                        final_text = f"OpenRouter call failed: {e}"
+                        break
+                    if or_resp.status_code != 200:
+                        termination = "error"
+                        final_text = (
+                            f"OpenRouter HTTP {or_resp.status_code}: {or_resp.text[:500]}"
+                        )
+                        break
+                    data = or_resp.json()
+                    usage = data.get("usage", {}) or {}
+                    prompt_tokens_total += int(usage.get("prompt_tokens", 0))
+                    completion_tokens_total += int(usage.get("completion_tokens", 0))
+                    choices = data.get("choices") or []
+                    if not choices:
+                        termination = "error"
+                        final_text = f"OpenRouter returned no choices: {data}"
+                        break
+                    msg = choices[0].get("message", {}) or {}
+                    n_assistant_messages += 1
+                    # Track reasoning if present (some models on OpenRouter
+                    # surface reasoning_content / thinking).
+                    reasoning = msg.get("reasoning") or msg.get("reasoning_content") or ""
+                    if isinstance(reasoning, list):
+                        reasoning = "\n".join(
+                            r.get("text", "") if isinstance(r, dict) else str(r)
+                            for r in reasoning
+                        )
+                    if reasoning:
+                        thinking_chars += len(reasoning)
+
+                    # Append assistant turn (preserving tool_calls for context).
+                    assistant_entry: dict[str, Any] = {
+                        "role": "assistant",
+                        "content": msg.get("content") or "",
+                    }
+                    if msg.get("tool_calls"):
+                        assistant_entry["tool_calls"] = msg["tool_calls"]
+                    messages.append(assistant_entry)
+                    messages_log.append({
+                        "role": "assistant",
+                        "content": msg.get("content") or "",
+                        "tool_calls": msg.get("tool_calls"),
+                        "reasoning_chars": len(reasoning) if reasoning else 0,
+                    })
+
+                    tool_calls = msg.get("tool_calls") or []
+                    if not tool_calls:
+                        final_text = msg.get("content") or ""
+                        termination = "completed"
+                        break
+
+                    # 4a) Dispatch tool calls
+                    for tc in tool_calls:
+                        if time.time() > deadline:
+                            break
+                        n_tool_calls += 1
+                        fn = tc.get("function") or {}
+                        name = fn.get("name", "")
+                        args_raw = fn.get("arguments") or "{}"
+                        try:
+                            args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})
+                        except json.JSONDecodeError:
+                            args = {}
+                        call_t0 = time.time()
+                        try:
+                            result = await session.call_tool(name, args)
+                            result_text = _summarize_tool_result(result)
+                            ok = not getattr(result, "isError", False)
+                        except Exception as e:
+                            result_text = f"tool error: {e}"
+                            ok = False
+                        call_dt = time.time() - call_t0
+
+                        actions_log.append({
+                            "n": n_tool_calls,
+                            "tool": name,
+                            "args": args,
+                            "ok": ok,
+                            "result_chars": len(result_text),
+                            "latency_s": round(call_dt, 3),
+                        })
+
+                        # tool_call_id MUST be a non-empty string — some
+                        # OpenRouter providers reject null. Synthesize one
+                        # from our turn counter when upstream omits it.
+                        tc_id = tc.get("id") or f"call_{n_tool_calls}"
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc_id,
+                            "name": name,
+                            "content": result_text,
+                        })
+                        messages_log.append({
+                            "role": "tool",
+                            "name": name,
+                            "content_chars": len(result_text),
+                        })
+
+                        # Cap per-task tool calls.
+                        if n_tool_calls >= task.max_actions:
+                            break
 
             # 5) Take final screenshot via MCP if available
             screenshot_path = run_dir / "screenshots" / "final.png"
@@ -381,8 +373,6 @@ class PlaywrightMCPRunner(RunnerBase):
                         )
                 except Exception:
                     pass
-
-            await client.aclose()
 
         ended_at = self.now_iso()
         duration = time.time() - t0

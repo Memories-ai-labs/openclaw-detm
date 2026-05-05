@@ -32,9 +32,10 @@ import re
 import shutil
 import subprocess
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from urllib.error import URLError
 
 from .base import RunResult, RunnerBase, TaskSpec, extract_json_block, save_run_artifacts
@@ -71,6 +72,23 @@ def _get_task(task_id: str) -> Optional[dict]:
         return _get_json(f"/api/tasks/{task_id}")
     except Exception:
         return None
+
+
+def _cancel_all_gui_agents() -> bool:
+    """POST /gui_agent/cancel?all=true so any in-flight gui_agent is
+    stopped before we start the next benchmark task. Returns True on
+    success, False on any error (best-effort)."""
+    try:
+        req = Request(
+            f"{DAEMON_URL}/gui_agent/cancel",
+            data=json.dumps({"all": True}).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urlopen(req, timeout=5).read()
+        return True
+    except Exception:
+        return False
 
 
 # ── Display + browser helpers ────────────────────────────────────────────
@@ -122,16 +140,26 @@ def _tmux_paste_prompt(session: str, prompt: str) -> None:
          LLM can read back as a paragraph break.
       2. Pasting the now single-line prompt.
       3. Sending one Enter to submit.
+
+    The tmux buffer name is per-call (UUID-suffixed) so a stale buffer
+    from a previous run can't get accidentally pasted if `load-buffer`
+    fails.
     """
     flat = prompt.replace("\r\n", "\n").replace("\n", "  //  ")
-    tmp = Path(f"/tmp/bench_prompt_{os.getpid()}.txt")
+    buf_name = f"bench_{uuid.uuid4().hex[:8]}"
+    tmp = Path(f"/tmp/{buf_name}.txt")
     tmp.write_text(flat)
     try:
-        _tmux("load-buffer", "-b", "bench", str(tmp))
-        _tmux("paste-buffer", "-b", "bench", "-t", session)
+        _tmux("load-buffer", "-b", buf_name, str(tmp))
+        _tmux("paste-buffer", "-b", buf_name, "-t", session)
         time.sleep(0.5)
         _tmux("send-keys", "-t", session, "Enter")
     finally:
+        # Clean up the tmux buffer (best-effort).
+        try:
+            _tmux("delete-buffer", "-b", buf_name)
+        except Exception:
+            pass
         try:
             tmp.unlink()
         except FileNotFoundError:
@@ -187,11 +215,27 @@ class DETMRunner(RunnerBase):
             raise RuntimeError(
                 f"DETM daemon not reachable at {DAEMON_URL}: {e}"
             ) from e
+        # Warn if the daemon URL is non-local — our screenshot helper still
+        # captures the local DISPLAY, which won't match what a remote agent
+        # sees and will produce nonsense judge verdicts.
+        if not any(host in DAEMON_URL for host in ("127.0.0.1", "localhost")):
+            print(
+                f"  ⚠ DETM_DAEMON_URL={DAEMON_URL!r} is non-local but "
+                f"screenshots will still be captured from local DISPLAY "
+                f"{DISPLAY!r}. Judge verdicts will be unreliable."
+            )
         # The daemon's gui_agent model should match what we requested.
         # We compare on `live_ui_model` since that's what `/health` exposes
         # for the bash backend.
         live_model = h.get("live_ui_model", "")
-        if live_model and live_model != self.model:
+        if not live_model:
+            raise RuntimeError(
+                f"DETM daemon at {DAEMON_URL} has no live_ui_model set "
+                f"(/health returned {h.get('live_ui_model')!r}). The daemon "
+                f"may be in a half-started state. Verify it's actually "
+                f"serving the bash backend with ACU_OPENROUTER_GUI_DIRECT_MODEL set."
+            )
+        if live_model != self.model:
             raise RuntimeError(
                 f"DETM daemon is configured with live_ui_model={live_model!r}, "
                 f"but this runner requested model={self.model!r}. "
@@ -200,12 +244,56 @@ class DETMRunner(RunnerBase):
             )
         return h
 
-    def _verify_tmux(self) -> None:
-        if not _tmux_session_exists(self.tmux_session):
-            raise RuntimeError(
-                f"tmux session {self.tmux_session!r} not found. Start an OpenClaw "
-                f"TUI in that session before running benchmarks."
-            )
+    def _recreate_oc_session(self, task_id: str, run_id: str) -> None:
+        """Kill any existing tmux session named `self.tmux_session` and
+        start a fresh one running `openclaw tui --session <unique>` so each
+        benchmark task lands in its own OpenClaw conversation (no cross-task
+        context bleed).
+
+        Polls the pane until the TUI's "idle" status appears, then returns.
+        Raises RuntimeError if the TUI doesn't come up within 60s.
+        """
+        # Sanitize task_id + run_id for the openclaw --session arg (alnum +
+        # hyphen). Truncate to keep tmux/openclaw key lengths sane.
+        sess_key = re.sub(r"[^A-Za-z0-9-]", "-", f"bench-{run_id}-{task_id}")[:60]
+
+        # Kill any prior session of this name.
+        subprocess.run(
+            ["tmux", "kill-session", "-t", self.tmux_session],
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        time.sleep(0.5)
+
+        # Detached new session.
+        subprocess.check_call([
+            "tmux", "new-session", "-d", "-s", self.tmux_session,
+            "-x", "220", "-y", "60",
+        ], timeout=10)
+
+        # Launch the TUI inside it.
+        subprocess.check_call([
+            "tmux", "send-keys", "-t", self.tmux_session,
+            f"openclaw tui --session {sess_key}",
+            "Enter",
+        ], timeout=10)
+
+        # Wait for the TUI's idle state to appear in the pane.
+        deadline = time.time() + 60.0
+        while time.time() < deadline:
+            try:
+                pane = _tmux_capture(self.tmux_session, lines=200)
+            except Exception:
+                pane = ""
+            if f"session {sess_key}" in pane and (
+                "idle" in pane or "connected" in pane
+            ):
+                return
+            time.sleep(1.0)
+        raise RuntimeError(
+            f"openclaw tui did not become ready in 60s in session "
+            f"{self.tmux_session}. Last pane head: {pane[:300]!r}"
+        )
 
     def _reset_browser(self) -> None:
         """Best-effort: close all browser tabs, leave one about:blank.
@@ -303,29 +391,46 @@ class DETMRunner(RunnerBase):
         return last_pane, False
 
     @staticmethod
-    def _extract_final_text(pane: str, sentinel: str) -> str:
+    def _extract_final_text(pane: str, sentinel: str, baseline_len: int = 0) -> str:
         """Pull the chunk of pane text just before the sentinel — that's
-        the agent's final response."""
-        idx = pane.rfind(sentinel)
-        if idx == -1:
+        the agent's final response.
+
+        baseline_len is the byte-length of the pane when we first saw it
+        right after pasting the prompt. We search for the sentinel only
+        in pane[baseline_len:] so we never match on the sentinel string
+        embedded in our own prompt instruction (or on a sentinel the
+        agent narrated mid-thought before completing).
+        """
+        new_text = pane[baseline_len:]
+        idx_in_new = new_text.find(sentinel)
+        if idx_in_new == -1:
+            # Fall back to last 4000 chars of pane if we can't locate it.
             return pane[-4000:]
-        # Walk backwards a few thousand chars to capture the final response
-        return pane[max(0, idx - 6000):idx]
+        idx = baseline_len + idx_in_new
+        return pane[max(baseline_len, idx - 6000):idx]
 
     def run(self, task: TaskSpec, run_dir: Path) -> RunResult:
         from .base import short_uid  # local import to avoid cycle warning
         sentinel = f"{_SENTINEL_PREFIX}{short_uid(8)}"
+        run_id = run_dir.parent.parent.name
 
         actions_log: list[dict] = []
         messages_log: list[dict] = []
 
         try:
             self._verify_daemon()
-            self._verify_tmux()
+            # Cancel any in-flight gui_agent left over from a prior run
+            # before we start. This is also our defense against runs where
+            # the previous task's agent is still navigating when we arrive.
+            _cancel_all_gui_agents()
+            # Always recreate the tmux/OpenClaw session so this task starts
+            # in a completely fresh conversation (no context bleed from
+            # earlier tasks in the same sweep).
+            self._recreate_oc_session(task.id, run_id)
         except Exception as e:
-            return RunResult(
+            r = RunResult(
                 task_id=task.id, family=self.family, model=self.model,
-                run_id=run_dir.parent.parent.name,
+                run_id=run_id,
                 started_at=self.now_iso(), ended_at=self.now_iso(),
                 duration_s=0.0, n_tool_calls=0, n_assistant_messages=0,
                 n_screenshots=0, thinking_chars=0,
@@ -334,6 +439,8 @@ class DETMRunner(RunnerBase):
                 termination_reason="error",
                 error_message=f"setup failed: {e}",
             )
+            save_run_artifacts(run_dir, r)
+            return r
 
         self._reset_browser()
         tasks_before = _list_task_ids()
@@ -355,11 +462,19 @@ class DETMRunner(RunnerBase):
             sentinel, baseline_count=baseline_count,
             deadline_s=task.max_duration_s + 30.0,
         )
+        baseline_len = len(baseline_pane)
+
+        # Always cancel any still-running gui_agent so the next task
+        # doesn't inherit it (regardless of whether we saw the sentinel).
+        _cancel_all_gui_agents()
 
         duration = time.time() - t0
         ended_at = self.now_iso()
 
-        final_text = self._extract_final_text(pane, sentinel) if saw_sentinel else pane[-6000:]
+        final_text = (
+            self._extract_final_text(pane, sentinel, baseline_len)
+            if saw_sentinel else pane[-6000:]
+        )
         parsed = extract_json_block(final_text)
 
         # Take final screenshot.
