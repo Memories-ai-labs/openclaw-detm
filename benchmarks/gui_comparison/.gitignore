@@ -1,2 +1,6 @@
 *.pyc
 __pycache__/
+
+# Per-run artifacts: screenshots, tmux dumps, JSONL logs.
+# Belong as side-effects of `python run_benchmark.py`, not in git.
+results/

@@ -32,6 +32,19 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))  # benchmarks/
 
+# Load repo-root .env so OPENROUTER_API_KEY etc. are available to runners
+# and the judge without the user having to source it manually.
+_ENV_FILE = HERE.parent.parent / ".env"
+if _ENV_FILE.exists():
+    import os
+    for _line in _ENV_FILE.read_text().splitlines():
+        _line = _line.strip()
+        if not _line or _line.startswith("#") or "=" not in _line:
+            continue
+        _k, _v = _line.split("=", 1)
+        _v = _v.strip().strip('"').strip("'")
+        os.environ.setdefault(_k.strip(), _v)
+
 from gui_comparison.runners.base import (
     RESULTS_DIR, TaskSpec, load_all_tasks, load_task, make_run_dir,
 )

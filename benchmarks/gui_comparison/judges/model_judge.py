@@ -1,5 +1,10 @@
 """Model-as-judge: claude-haiku-4-5 verdict on one trial.
 
+Uses OpenRouter (openrouter.ai) for both authentication and routing —
+the env we run in has OPENROUTER_API_KEY but no native ANTHROPIC_API_KEY.
+The judge model defaults to `anthropic/claude-haiku-4-5` over OpenRouter,
+but can be overridden via BENCH_JUDGE_MODEL.
+
 Inputs: TaskSpec, the agent's final text answer, and the path to the
 final-state screenshot (optional but strongly recommended — the rubric
 verifies what's on screen, not just what the agent claimed).
@@ -19,9 +24,10 @@ import os
 from pathlib import Path
 from typing import Optional
 
-import anthropic
+import httpx
 
-JUDGE_MODEL = os.environ.get("BENCH_JUDGE_MODEL", "claude-haiku-4-5")
+JUDGE_MODEL = os.environ.get("BENCH_JUDGE_MODEL", "anthropic/claude-haiku-4-5")
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 _SYSTEM = """You are a strict, conservative judge for a GUI agent benchmark.
 
@@ -63,10 +69,43 @@ _USER_TEMPLATE = """## Task
 ```
 
 ## Screenshot of agent's final state
-(see attached image)
+(see attached image, if present)
 
 Return JSON: {{"success": bool, "partial_credit": float, "reason": str}}
 """
+
+
+def _build_message(task, final_answer: str, screenshot_path: Optional[Path]) -> dict:
+    text_part = {
+        "type": "text",
+        "text": _USER_TEMPLATE.format(
+            task_title=task.title,
+            task_prompt=task.prompt,
+            judge_rubric=task.judge_rubric,
+            final_answer=final_answer or "(empty)",
+        ),
+    }
+    content: list = [text_part]
+
+    if screenshot_path and screenshot_path.exists():
+        try:
+            data = screenshot_path.read_bytes()
+            b64 = base64.standard_b64encode(data).decode("ascii")
+            ext = screenshot_path.suffix.lstrip(".").lower()
+            if ext == "jpg":
+                ext = "jpeg"
+            mt = {"png": "image/png", "jpeg": "image/jpeg"}.get(ext, "image/png")
+            # OpenAI-compat (OpenRouter) image format:
+            content.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mt};base64,{b64}"},
+            })
+        except Exception as e:
+            text_part["text"] += f"\n\n(screenshot read failed: {e})"
+    else:
+        text_part["text"] += "\n\n(no screenshot was captured)"
+
+    return {"role": "user", "content": content}
 
 
 def judge(
@@ -74,67 +113,71 @@ def judge(
     final_answer: str,
     final_screenshot_path: Optional[Path] = None,
     api_key: Optional[str] = None,
+    model: Optional[str] = None,
 ) -> dict:
-    """Returns dict with keys: success (bool), partial_credit (float), reason (str).
-    On API error or unparseable response, returns success=False with the error in reason.
-    """
-    client = anthropic.Anthropic(
-        api_key=api_key or os.environ.get("ANTHROPIC_API_KEY"),
-    )
-
-    user_content: list = [
-        {
-            "type": "text",
-            "text": _USER_TEMPLATE.format(
-                task_title=task.title,
-                task_prompt=task.prompt,
-                judge_rubric=task.judge_rubric,
-                final_answer=final_answer or "(empty)",
-            ),
-        }
-    ]
-    if final_screenshot_path and final_screenshot_path.exists():
-        try:
-            data = final_screenshot_path.read_bytes()
-            b64 = base64.standard_b64encode(data).decode("ascii")
-            ext = final_screenshot_path.suffix.lstrip(".").lower()
-            if ext == "jpg":
-                ext = "jpeg"
-            mt = {"png": "image/png", "jpeg": "image/jpeg"}.get(ext, "image/png")
-            user_content.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": mt, "data": b64},
-            })
-        except Exception as e:
-            user_content[0]["text"] += f"\n\n(screenshot read failed: {e})"
-    else:
-        user_content[0]["text"] += "\n\n(no screenshot was captured)"
-
-    try:
-        resp = client.messages.create(
-            model=JUDGE_MODEL,
-            max_tokens=1024,
-            system=_SYSTEM,
-            messages=[{"role": "user", "content": user_content}],
-        )
-        raw = "".join(
-            b.text for b in resp.content if getattr(b, "type", None) == "text"
-        )
-    except Exception as e:
+    """Returns dict with keys: success (bool), partial_credit (float),
+    reason (str). On API error or unparseable response, returns success=False
+    with the error in reason."""
+    api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
+    if not api_key:
         return {
             "success": False,
             "partial_credit": 0.0,
-            "reason": f"judge API call failed: {e}",
+            "reason": "OPENROUTER_API_KEY not set — judge cannot run",
+        }
+    use_model = model or JUDGE_MODEL
+
+    messages = [
+        {"role": "system", "content": _SYSTEM},
+        _build_message(task, final_answer, final_screenshot_path),
+    ]
+    try:
+        with httpx.Client(timeout=60.0) as c:
+            resp = c.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://github.com/anthropics/openclaw",
+                    "X-Title": "DETM-bench-judge",
+                },
+                json={
+                    "model": use_model,
+                    "messages": messages,
+                    "max_tokens": 1024,
+                },
+            )
+        if resp.status_code != 200:
+            return {
+                "success": False,
+                "partial_credit": 0.0,
+                "reason": f"judge HTTP {resp.status_code}: {resp.text[:300]}",
+            }
+        data = resp.json()
+        choices = data.get("choices") or []
+        if not choices:
+            return {
+                "success": False, "partial_credit": 0.0,
+                "reason": f"judge: no choices: {data}",
+            }
+        raw = (choices[0].get("message") or {}).get("content") or ""
+    except Exception as e:
+        return {
+            "success": False, "partial_credit": 0.0,
+            "reason": f"judge HTTP call failed: {e}",
         }
 
-    # Parse — judge is instructed to return bare JSON.
+    # Tolerate accidental code fences in the judge response.
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        # Strip an opening fence line and any trailing fence.
+        lines = cleaned.split("\n")
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        cleaned = "\n".join(lines)
     try:
-        # Tolerate accidental fences.
-        cleaned = raw.strip()
-        if cleaned.startswith("```"):
-            cleaned = cleaned.strip("`")
-            if cleaned.lower().startswith("json"):
-                cleaned = cleaned[4:].strip()
         parsed = json.loads(cleaned)
         return {
             "success": bool(parsed.get("success")),

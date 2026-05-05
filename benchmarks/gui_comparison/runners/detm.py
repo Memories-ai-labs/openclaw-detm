@@ -112,9 +112,20 @@ def _tmux_session_exists(name: str) -> bool:
 
 
 def _tmux_paste_prompt(session: str, prompt: str) -> None:
-    """Load prompt into a tmux buffer, paste into session, hit Enter."""
+    """Send prompt to the OpenClaw TUI in `session`, then submit.
+
+    Critical: newlines in a tmux paste-buffer are interpreted as Enter
+    keys, which submit partial messages — the OpenClaw TUI then sees a
+    sequence of separate user turns and only the last line lands as
+    the actual prompt. We work around this by:
+      1. Replacing any literal newline with a placeholder string the
+         LLM can read back as a paragraph break.
+      2. Pasting the now single-line prompt.
+      3. Sending one Enter to submit.
+    """
+    flat = prompt.replace("\r\n", "\n").replace("\n", "  //  ")
     tmp = Path(f"/tmp/bench_prompt_{os.getpid()}.txt")
-    tmp.write_text(prompt)
+    tmp.write_text(flat)
     try:
         _tmux("load-buffer", "-b", "bench", str(tmp))
         _tmux("paste-buffer", "-b", "bench", "-t", session)
@@ -253,22 +264,31 @@ class DETMRunner(RunnerBase):
             pass
 
     def _build_prompt(self, task: TaskSpec, sentinel: str) -> str:
+        # Note: returned newlines will be flattened by _tmux_paste_prompt
+        # into "  //  " separators; the LLM can still parse the structure.
         return (
-            f"DETM ONLY\n\n"
-            f"{task.prompt}\n\n"
+            f"DETM ONLY\n"
+            f"{task.prompt}\n"
             f"---\n"
             f"When you finish the task (success OR failure), produce your "
             f"final JSON answer in a ```json fenced code block, then on its "
-            f"own line type exactly:\n"
-            f"{sentinel}\n\n"
-            f"Do not type that sentinel before you are completely done."
+            f"own line type exactly: {sentinel} . "
+            f"Do not type that sentinel string before you are completely done with the task."
         )
 
     def _wait_for_sentinel(
-        self, sentinel: str, deadline_s: float
+        self, sentinel: str, baseline_count: int, deadline_s: float
     ) -> tuple[str, bool]:
-        """Poll tmux pane for the sentinel string. Returns (full_pane_text,
-        sentinel_seen)."""
+        """Poll tmux pane for one MORE occurrence of the sentinel than was
+        present at baseline_count.
+
+        baseline_count is the count of sentinel occurrences in the pane
+        immediately after we pasted the prompt — that paste itself contains
+        the sentinel string (in the instruction "type exactly: <sentinel>"),
+        so we must wait for the count to grow before declaring the agent
+        done.
+
+        Returns (full_pane_text, sentinel_seen)."""
         start = time.time()
         last_pane = ""
         while time.time() - start < deadline_s:
@@ -276,7 +296,7 @@ class DETMRunner(RunnerBase):
                 pane = _tmux_capture(self.tmux_session)
             except subprocess.CalledProcessError:
                 pane = ""
-            if sentinel in pane:
+            if pane.count(sentinel) > baseline_count:
                 return pane, True
             last_pane = pane
             time.sleep(2.0)
@@ -322,10 +342,18 @@ class DETMRunner(RunnerBase):
         started_at = self.now_iso()
         t0 = time.time()
         _tmux_paste_prompt(self.tmux_session, prompt)
+        # Brief pause so the paste lands in the pane, then snapshot baseline.
+        time.sleep(2.0)
+        try:
+            baseline_pane = _tmux_capture(self.tmux_session)
+        except subprocess.CalledProcessError:
+            baseline_pane = ""
+        baseline_count = baseline_pane.count(sentinel)
 
         # Wait for the agent to finish or time out.
         pane, saw_sentinel = self._wait_for_sentinel(
-            sentinel, deadline_s=task.max_duration_s + 30.0
+            sentinel, baseline_count=baseline_count,
+            deadline_s=task.max_duration_s + 30.0,
         )
 
         duration = time.time() - t0
@@ -341,42 +369,67 @@ class DETMRunner(RunnerBase):
         # Save raw tmux pane for debugging.
         (run_dir / "tmux_pane.txt").write_text(pane)
 
-        # Identify the new DETM task and pull its metrics.
+        # Identify DETM activity during this run.
+        #
+        # We can't rely solely on "new task_id appeared" because OpenClaw
+        # sometimes routes gui_agent calls to a pre-existing task (when
+        # task_register isn't called, or when DETM matches by name). So we
+        # widen the scope: collect every action_detail across every task
+        # whose `created_at` falls between started_at and ended_at + grace,
+        # regardless of which DETM task it lives on.
         tasks_after = _list_task_ids()
+        all_task_ids = tasks_before | tasks_after
         new_task_ids = list(tasks_after - tasks_before)
         detm_task_summary = None
         n_tool_calls = 0
         n_assistant_messages = 0
+        action_window_start = started_at
+        # ended_at is computed below; we use the wall-clock 'now' minus
+        # a small buffer so any action_detail produced during this run
+        # is captured.
+        for tid in all_task_ids:
+            d = _get_task(tid)
+            if not d:
+                continue
+            for item in d.get("items", []):
+                for ad in item.get("action_details", []):
+                    ad_ts = ad.get("created_at", "")
+                    if not ad_ts:
+                        continue
+                    if not (action_window_start <= ad_ts <= ended_at):
+                        continue
+                    out = ad.get("output_data") or "{}"
+                    try:
+                        out_obj = json.loads(out) if isinstance(out, str) else out
+                    except Exception:
+                        out_obj = {}
+                    n_tool_calls += int(out_obj.get("actions_taken", 0))
+                    n_assistant_messages += 1
+                    actions_log.append({
+                        "detm_task_id": tid,
+                        "id": ad.get("id"),
+                        "type": ad.get("action_type"),
+                        "summary": ad.get("summary"),
+                        "status": ad.get("status"),
+                        "created_at": ad.get("created_at"),
+                        "actions_taken": int(out_obj.get("actions_taken", 0)),
+                    })
+        # Pick the new task (if any) as the "primary" detm_task for
+        # artifact copy + traceability.
         if new_task_ids:
-            # Pick the most recently created.
-            details = []
-            for tid in new_task_ids:
-                d = _get_task(tid)
-                if d:
-                    details.append(d)
+            details = [d for d in (_get_task(tid) for tid in new_task_ids) if d]
             details.sort(key=lambda d: d.get("created_at", ""), reverse=True)
             if details:
                 detm_task_summary = details[0]
-                # Sum actions_taken across all gui_agent calls.
-                for item in detm_task_summary.get("items", []):
-                    for ad in item.get("action_details", []):
-                        out = ad.get("output_data") or "{}"
-                        try:
-                            out_obj = json.loads(out) if isinstance(out, str) else out
-                        except Exception:
-                            out_obj = {}
-                        n_tool_calls += int(out_obj.get("actions_taken", 0))
-                        n_assistant_messages += 1
-                        actions_log.append({
-                            "id": ad.get("id"),
-                            "type": ad.get("action_type"),
-                            "summary": ad.get("summary"),
-                            "status": ad.get("status"),
-                            "created_at": ad.get("created_at"),
-                            "actions_taken": int(out_obj.get("actions_taken", 0)),
-                        })
-                # Copy DETM raw artifacts in.
                 _copy_detm_artifacts(detm_task_summary["task_id"], run_dir)
+        elif actions_log:
+            # No new task — fall back to the task most-touched during this run.
+            from collections import Counter
+            counts = Counter(a["detm_task_id"] for a in actions_log)
+            primary_tid = counts.most_common(1)[0][0]
+            detm_task_summary = _get_task(primary_tid)
+            if detm_task_summary:
+                _copy_detm_artifacts(primary_tid, run_dir)
 
         # The OpenClaw TUI itself is the "assistant" — without parsing it
         # turn-by-turn we can only count gui_agent invocations as a lower
