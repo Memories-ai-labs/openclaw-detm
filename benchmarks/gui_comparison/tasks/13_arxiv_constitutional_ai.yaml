@@ -1,0 +1,32 @@
+id: "13_arxiv_constitutional_ai"
+title: "arXiv — top result for 'constitutional ai'"
+tier: 3
+
+prompt: |
+  On arXiv (arxiv.org), search for:
+      constitutional ai
+  Open the top result. Report the paper's title, the first author's
+  name as listed on the abstract page, and the year the paper was
+  submitted (visible in the arXiv ID or the submission date).
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "title": "...",
+    "first_author": "...",
+    "year": 2022
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 40
+max_duration_s: 180
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows an arxiv.org abstract page (URL contains
+     /abs/) for a paper related to Constitutional AI.
+  2. title contains "Constitutional AI" or a close variant.
+  3. first_author is a plausible name.
+  4. year is between 2022 and the current year.
+
+  Score: 1.0 if all pass. 0.25 each. 0.0 if arXiv was never reached.

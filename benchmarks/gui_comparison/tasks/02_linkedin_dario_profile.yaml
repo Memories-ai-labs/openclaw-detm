@@ -1,0 +1,36 @@
+id: "02_linkedin_dario_profile"
+title: "LinkedIn — Dario Amodei profile lookup"
+tier: 1
+
+family_constraints:
+  needs_logged_in_linkedin: true
+
+prompt: |
+  Find the LinkedIn profile of Dario Amodei (CEO of Anthropic).
+  Report his current title and company, plus the title and company of
+  the most recent role listed under his Experience section before the
+  current one.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "current": {"title": "...", "company": "..."},
+    "previous": {"title": "...", "company": "..."}
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 60
+max_duration_s: 300
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows Dario Amodei's LinkedIn profile (the visible
+     name on the profile reads "Dario Amodei" or similar).
+  2. current.title is a plausible CEO/President-style title and
+     current.company is "Anthropic" (or a close variant).
+  3. previous.company is a real organization (commonly OpenAI, Google,
+     Baidu, or Princeton based on his public history) with a plausible
+     title.
+
+  Score: 1.0 if all 3 pass. 0.5 if current is right but previous is
+  wrong/missing. 0.0 if profile was never reached.

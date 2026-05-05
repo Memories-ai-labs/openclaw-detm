@@ -1,0 +1,38 @@
+id: "05_linkedin_openai_sf_filter"
+title: "LinkedIn — OpenAI People filtered by SF location"
+tier: 1
+
+family_constraints:
+  needs_logged_in_linkedin: true
+
+prompt: |
+  On LinkedIn, navigate to the OpenAI company page. Open the People tab.
+  Apply a location filter for "San Francisco Bay Area" (or "San Francisco"
+  if the Bay Area option isn't available). Report the names and titles of
+  the first 3 employees shown after the filter is applied.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "employees": [
+      {"name": "...", "title": "..."},
+      {"name": "...", "title": "..."},
+      {"name": "...", "title": "..."}
+    ]
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 100
+max_duration_s: 480
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows OpenAI's company People page with a location
+     filter applied (a chip or text indicating San Francisco area is
+     visible somewhere on screen).
+  2. The answer contains 3 employee entries.
+  3. Each name + title is plausible (real-sounding name, real job title).
+
+  Score: 1.0 if all pass. 0.33 per correct entry partial credit. 0.5
+  cap if the page was reached but the location filter was never
+  successfully applied.

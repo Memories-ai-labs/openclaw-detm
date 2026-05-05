@@ -1,0 +1,37 @@
+id: "08_github_claude_code_issues"
+title: "GitHub — open bug issues on anthropics/claude-code"
+tier: 2
+
+prompt: |
+  On GitHub, navigate to the repository anthropics/claude-code.
+  Open the Issues tab and filter to show only open issues with the
+  label "bug". Report the titles of the first 3 issues shown.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "issues": [
+      {"title": "..."},
+      {"title": "..."},
+      {"title": "..."}
+    ]
+  }
+
+  If no "bug" label exists on the repo, use the closest equivalent
+  (e.g., "type: bug", "kind/bug") and note that in your answer.
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 50
+max_duration_s: 240
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows github.com/anthropics/claude-code/issues with
+     a label filter applied (the active filter chip or URL query
+     reflects a bug-style label).
+  2. The answer contains 3 issue titles.
+  3. The titles look like real bug-report titles (not truncated to
+     nothing, not generic placeholders).
+
+  Score: 1.0 if all pass. 0.33 per correct title partial credit.
+  Cap at 0.5 if no label filter was applied but issues were listed.

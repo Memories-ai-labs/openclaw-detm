@@ -1,0 +1,35 @@
+id: "10_youtube_claude_code_tutorial"
+title: "YouTube — top-viewed tutorials for 'claude code'"
+tier: 2
+
+prompt: |
+  On YouTube (youtube.com), search for:
+      claude code tutorial
+  Sort the results by view count (highest first). Report the title and
+  channel name of the top 3 videos.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "videos": [
+      {"title": "...", "channel": "..."},
+      {"title": "...", "channel": "..."},
+      {"title": "...", "channel": "..."}
+    ]
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 60
+max_duration_s: 300
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows youtube.com search results for "claude code
+     tutorial" with a sort/filter indicating view count ordering (the
+     filter chip "Sort by: View count" is visible, or the URL contains
+     the relevant sort parameter).
+  2. The answer contains 3 video entries.
+  3. Each title and channel looks plausible (not empty, not generic).
+
+  Score: 1.0 if all pass. 0.33 per correct entry partial credit. Cap
+  at 0.5 if results are shown but not sorted by views.

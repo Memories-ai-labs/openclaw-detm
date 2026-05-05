@@ -1,0 +1,38 @@
+id: "03_linkedin_hashtag_claudecode"
+title: "LinkedIn — recent posts under #claudecode"
+tier: 1
+
+family_constraints:
+  needs_logged_in_linkedin: true
+
+prompt: |
+  On LinkedIn, find recent posts tagged with the hashtag #claudecode.
+  Report the author name and a short snippet (~50 chars) of the post body
+  for the top 3 most recent posts visible in the feed.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "posts": [
+      {"author": "...", "snippet": "..."},
+      {"author": "...", "snippet": "..."},
+      {"author": "...", "snippet": "..."}
+    ]
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 80
+max_duration_s: 360
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows a LinkedIn search/feed page filtered by the
+     #claudecode hashtag (URL or page header indicates the filter).
+  2. The answer contains 3 post entries.
+  3. Each author looks like a real LinkedIn user name (first + last, or
+     a company page name).
+  4. Each snippet contains plausible content (not empty, not "N/A",
+     not a literal placeholder).
+
+  Score: 1.0 if all 4 pass. 0.33 per correct post as partial credit.
+  0.0 if the hashtag page was never reached.

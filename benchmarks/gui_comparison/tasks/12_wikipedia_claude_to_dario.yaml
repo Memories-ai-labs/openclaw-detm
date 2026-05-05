@@ -1,0 +1,35 @@
+id: "12_wikipedia_claude_to_dario"
+title: "Wikipedia — navigate from Claude (LLM) to Dario Amodei"
+tier: 3
+
+prompt: |
+  Start at the Wikipedia article titled "Claude (large language model)"
+  (en.wikipedia.org/wiki/Claude_(language_model) or similar). From
+  that page, reach the Wikipedia article about Dario Amodei by
+  clicking only on links within Wikipedia article bodies. Track the
+  exact sequence of article titles you visited.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "path": ["Claude (large language model)", "...", "Dario Amodei"]
+  }
+
+  The path must include the starting article and the ending article.
+  Aim for a short path (2 to 4 hops total).
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 30
+max_duration_s: 180
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows en.wikipedia.org with the Dario Amodei article
+     as the visible page (the article title visible in the page header).
+  2. path[0] is the Claude (LLM) article title.
+  3. path[-1] is "Dario Amodei".
+  4. Each intermediate entry in path is a plausible Wikipedia article
+     title (e.g., Anthropic, OpenAI).
+
+  Score: 1.0 if all pass. 0.5 if final page reached but path is missing
+  or wrong. 0.0 if Dario Amodei article was never reached.

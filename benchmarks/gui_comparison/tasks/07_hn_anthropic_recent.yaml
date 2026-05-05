@@ -1,0 +1,33 @@
+id: "07_hn_anthropic_recent"
+title: "Hacker News — recent post mentioning Anthropic"
+tier: 2
+
+prompt: |
+  On Hacker News (news.ycombinator.com), find a story that mentions
+  Anthropic in its title and was submitted in the past 7 days. Report
+  the title, the submitting user, and the current point count.
+
+  You can use HN's search via the link at the bottom of the page (which
+  goes to hn.algolia.com), or search any other way you prefer.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "title": "...",
+    "user": "...",
+    "points": 0
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 50
+max_duration_s: 240
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows news.ycombinator.com or hn.algolia.com with
+     a story whose title mentions Anthropic visible.
+  2. title contains "Anthropic" (case-insensitive).
+  3. user is a plausible HN username (alphanumeric, no spaces).
+  4. points is an integer >= 0.
+
+  Score: 1.0 if all pass. 0.33 each. 0.0 if HN was never reached.

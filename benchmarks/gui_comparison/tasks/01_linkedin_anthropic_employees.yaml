@@ -1,0 +1,41 @@
+id: "01_linkedin_anthropic_employees"
+title: "LinkedIn — Anthropic company People tab"
+tier: 1
+
+family_constraints:
+  needs_logged_in_linkedin: true
+
+prompt: |
+  Open LinkedIn and navigate to the company page for "Anthropic".
+  Open the "People" tab on that company page and report the names and
+  current titles of the first 5 employees shown.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "employees": [
+      {"name": "...", "title": "..."},
+      {"name": "...", "title": "..."},
+      {"name": "...", "title": "..."},
+      {"name": "...", "title": "..."},
+      {"name": "...", "title": "..."}
+    ]
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 80
+max_duration_s: 360
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows the LinkedIn company People page for Anthropic
+     (URL contains linkedin.com/company/anthropicresearch or similar; page
+     header says Anthropic; a People tab is visible and active).
+  2. The answer contains exactly 5 employee entries.
+  3. Each name is a plausible real person's name (first + last), not a
+     placeholder or company name.
+  4. Each title is a plausible job title, not empty or "N/A".
+
+  Score: 1.0 if all 4 checks pass. 0.2 per correctly-extracted entry as
+  partial credit (e.g., 4 valid out of 5 entries → 0.8). 0.0 if the
+  agent never reached the right page.

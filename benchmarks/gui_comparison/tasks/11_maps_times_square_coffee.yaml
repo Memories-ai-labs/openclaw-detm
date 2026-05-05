@@ -1,0 +1,36 @@
+id: "11_maps_times_square_coffee"
+title: "Google Maps — coffee near Times Square NYC"
+tier: 3
+
+prompt: |
+  On Google Maps (maps.google.com), search for:
+      coffee near Times Square, New York, NY
+  Report the names and star ratings (out of 5) of the first 3 results
+  shown in the left-hand results panel.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "results": [
+      {"name": "...", "rating": 4.5},
+      {"name": "...", "rating": 4.5},
+      {"name": "...", "rating": 4.5}
+    ]
+  }
+
+  If a result has no rating, use null for the rating field.
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 50
+max_duration_s: 240
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows google.com/maps with coffee shop results in
+     the Times Square area (Manhattan landmarks visible on the map, or
+     Times Square text visible in search query/header).
+  2. The answer contains 3 results.
+  3. Each name is a plausible coffee shop name.
+  4. Each rating is a number between 0 and 5, or null.
+
+  Score: 1.0 if all pass. 0.33 per correct entry partial credit.

@@ -1,0 +1,33 @@
+id: "15_scholar_attention"
+title: "Google Scholar — citation count for 'Attention Is All You Need'"
+tier: 3
+
+prompt: |
+  On Google Scholar (scholar.google.com), search for:
+      attention is all you need
+  Find the canonical paper of that title (by Vaswani et al., 2017).
+  Report the paper's full title as shown, the first author's name,
+  and the current "Cited by" count visible beneath the result.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "title": "...",
+    "first_author": "...",
+    "cited_by": 0
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 30
+max_duration_s: 180
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows scholar.google.com search results that
+     include the Vaswani et al. paper.
+  2. title contains "Attention Is All You Need".
+  3. first_author is "A Vaswani" or "Ashish Vaswani" (or similar).
+  4. cited_by is a positive integer (and very large — >100,000 as of
+     2025; flag low values as suspicious).
+
+  Score: 1.0 if all pass. 0.25 each. 0.0 if Scholar was never reached.

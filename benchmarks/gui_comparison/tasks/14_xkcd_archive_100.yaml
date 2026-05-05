@@ -1,0 +1,38 @@
+id: "14_xkcd_archive_100"
+title: "xkcd — comic #100 via the archive"
+tier: 3
+
+prompt: |
+  Start at xkcd.com. Use the site's archive (the link "Archive" in the
+  top navigation, which goes to xkcd.com/archive/) to navigate to
+  comic number 100. Do not type the URL xkcd.com/100 directly — find
+  the comic by browsing the archive page.
+
+  Once on comic #100, report the comic's title (the heading above the
+  image) and the alt-text of the image (the tooltip that appears when
+  you hover over the comic image, also accessible via the page source
+  if needed).
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "title": "...",
+    "alt_text": "..."
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 30
+max_duration_s: 180
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows xkcd.com/100 (URL visible or page indicates
+     comic #100).
+  2. title is the actual title of xkcd comic #100 ("Family Circus").
+  3. alt_text is the actual alt-text of comic #100 (about lasers and
+     vector calculus, roughly).
+
+  Score: 1.0 if all pass. 0.5 if reached the comic but title or
+  alt-text wrong. 0.0 if the comic was never reached. Also award 0.0
+  if the agent cheated by typing xkcd.com/100 directly without
+  visiting the archive (this should be detectable in the action log).

@@ -1,0 +1,36 @@
+id: "09_stackoverflow_asyncio"
+title: "Stack Overflow — top result for asyncio.gather exception query"
+tier: 2
+
+prompt: |
+  On Stack Overflow (stackoverflow.com), search for:
+      python asyncio gather exception
+  Open the highest-voted question matching that search. Report the
+  question title, the asker's display name, and the score (vote count)
+  of the accepted answer. If there is no accepted answer, report the
+  score of the top-voted answer instead and set "accepted" to false.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "question_title": "...",
+    "asker": "...",
+    "answer_score": 0,
+    "accepted": true
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 50
+max_duration_s: 240
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows a stackoverflow.com question page (not the
+     search results page) with content related to asyncio.gather and
+     exceptions.
+  2. question_title looks like a real Stack Overflow question (not a
+     placeholder).
+  3. asker is a plausible username.
+  4. answer_score is a non-negative integer.
+
+  Score: 1.0 if all pass. 0.25 each. 0.0 if SO was never reached.

@@ -1,0 +1,37 @@
+id: "04_linkedin_anthropic_jobs"
+title: "LinkedIn — Anthropic open job listings"
+tier: 1
+
+family_constraints:
+  needs_logged_in_linkedin: true
+
+prompt: |
+  On LinkedIn, navigate to the Anthropic company page and open the Jobs
+  tab. Report the title and location of the first 5 open roles shown.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "jobs": [
+      {"title": "...", "location": "..."},
+      {"title": "...", "location": "..."},
+      {"title": "...", "location": "..."},
+      {"title": "...", "location": "..."},
+      {"title": "...", "location": "..."}
+    ]
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 80
+max_duration_s: 360
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows the LinkedIn Jobs tab on Anthropic's company
+     page (URL or breadcrumb indicates Anthropic + Jobs).
+  2. The answer contains 5 job entries.
+  3. Each title is a plausible engineering/research/operations role.
+  4. Each location is a real city/region or "Remote" / "Hybrid" style.
+
+  Score: 1.0 if all 4 pass. 0.2 per correct entry partial credit.
+  0.0 if the Jobs tab was never reached.

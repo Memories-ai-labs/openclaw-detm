@@ -1,0 +1,34 @@
+id: "06_reddit_localllama_top_month"
+title: "Reddit — r/LocalLLaMA top posts of the month"
+tier: 2
+
+prompt: |
+  On Reddit (reddit.com), navigate to the subreddit r/LocalLLaMA.
+  Sort posts by Top → This Month. Report the titles of the top 3 posts.
+
+  Return your final answer as JSON in this exact shape:
+  {
+    "posts": [
+      {"title": "..."},
+      {"title": "..."},
+      {"title": "..."}
+    ]
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 60
+max_duration_s: 300
+
+judge_rubric: |
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The screenshot shows reddit.com/r/LocalLLaMA with a "Top" sort
+     applied for "This Month" (the sort indicator on the page reflects
+     this).
+  2. The answer contains 3 post titles.
+  3. The titles look like real Reddit post titles (not "Post 1", not
+     truncated to nothing, not generic placeholder text).
+
+  Score: 1.0 if all pass. 0.33 per correct title partial credit.
+  Cap at 0.5 if sorted by something other than Top→Month but still on
+  r/LocalLLaMA.

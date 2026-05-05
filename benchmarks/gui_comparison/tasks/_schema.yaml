@@ -1,0 +1,41 @@
+# Task YAML schema (annotated example, not a real task — leading underscore
+# in filename so loaders can skip it).
+#
+# Each task is a single YAML file under tasks/. The fields below are required
+# unless marked OPTIONAL.
+
+id: "00_example"                       # Filename stem must match this id.
+title: "Human-readable name"           # Used in reports.
+tier: 1                                # 1 = LinkedIn, 2 = other JS-heavy sites,
+                                       # 3 = navigation-heavy on stable sites.
+
+family_constraints:                    # OPTIONAL. Hard requirements per family.
+  needs_logged_in_linkedin: false      # If true, runner must verify LinkedIn
+                                       # session is live before starting.
+  needs_logged_in_google: false        # Same for Google.
+
+prompt: |                              # The exact instruction handed to every
+                                       # agent. Identical across all 3 families.
+                                       # Always end with the JSON schema the
+                                       # agent must return + the failure schema.
+  Go to example.com and report the page title.
+
+  Return your final answer as JSON:
+  {
+    "title": "..."
+  }
+
+  If you cannot complete the task, return: {"failed": true, "reason": "..."}
+
+max_actions: 80                        # Hard cap on tool calls per run.
+max_duration_s: 360                    # Hard cap on wall-clock seconds.
+
+judge_rubric: |                        # Free-text rubric handed to the judge
+                                       # model alongside the task prompt and
+                                       # the agent's final answer + screenshot.
+                                       # Specify what success looks like and
+                                       # how to award partial credit.
+  Verify from the agent's final answer AND the final screenshot that:
+  1. The agent reached example.com.
+  2. The reported title matches the page's actual title.
+  Score 1.0 if correct, 0.0 if not. No partial credit.
