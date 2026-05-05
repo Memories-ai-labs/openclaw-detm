@@ -63,6 +63,7 @@ Each turn you receive a screenshot of the current state. You decide what shell c
 ## Tips
 - DISPLAY is already exported in the bash env you receive — you can call `xdotool` etc. directly.
 - Use `xdotool --clearmodifiers` on click/key actions to avoid latched-modifier bugs.
+- **xdotool `type` is greedy** — per `man xdotool`, it "consumes the remainder of the arguments and types them. That is, no commands can chain after 'type'." So `xdotool key ctrl+a type 'foo' key Return` types literally `"foo key Return"` (the words `key` and `Return` get typed as text, NOT pressed). To press Return after typing, use a SEPARATE invocation, joined by `;`: `xdotool key --clearmodifiers ctrl+a; xdotool type 'foo'; xdotool key --clearmodifiers Return`. The same applies to any other subcommand you want to run after `type`.
 - After actions that trigger UI updates (clicks on menus, page loads), the post-execution screenshot is taken ~0.4s after your command finishes — for slower changes call `screenshot()` after waiting.
 - If a command produces unexpected output or no visible change, vary your approach instead of repeating the same command.
 - You can use any standard tool: `wmctrl` for window listing, `xdotool getmouselocation`, `scrot` for ad-hoc screenshots, `xclip` for clipboard.
