@@ -45,6 +45,11 @@ PROFILE_DIR = Path(os.environ.get(
     os.path.expanduser("~/.bench-chromium-profile"),
 ))
 DISPLAY = os.environ.get("BENCH_DISPLAY", ":99")
+# Headed by default so the user can watch and so screenshots reflect a
+# realistic viewport. Set BENCH_PLAYWRIGHT_HEADLESS=1 for tier-3 tasks
+# where you don't need a visible window (faster, no display contention
+# with DETM's browser on :99).
+HEADLESS = os.environ.get("BENCH_PLAYWRIGHT_HEADLESS", "0") == "1"
 
 
 # ── MCP client glue (async) ──────────────────────────────────────────────
@@ -140,15 +145,17 @@ class PlaywrightMCPRunner(RunnerBase):
 
         # 1) Spawn Playwright MCP --------------------------------------
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        playwright_args = [
+            "-y", "@playwright/mcp@latest",
+            "--browser", "chromium",
+            "--user-data-dir", str(PROFILE_DIR),
+            "--viewport-size", "1920,1080",
+        ]
+        if HEADLESS:
+            playwright_args.append("--headless")
         server = StdioServerParameters(
             command="npx",
-            args=[
-                "-y", "@playwright/mcp",
-                "--browser", "chromium",
-                "--user-data-dir", str(PROFILE_DIR),
-                "--no-headless",
-                "--viewport-size", "1920,1080",
-            ],
+            args=playwright_args,
             env={**os.environ, "DISPLAY": DISPLAY},
         )
 

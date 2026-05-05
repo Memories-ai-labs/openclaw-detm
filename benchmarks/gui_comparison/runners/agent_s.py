@@ -89,20 +89,26 @@ def _make_agent(model: str, ground_model: str = "bytedance/ui-tars-1.5-7b"):
     if not api_key:
         raise RuntimeError("OPENROUTER_API_KEY required for Agent S")
 
+    # LMMEngineOpenRouter passes the model name straight through to
+    # OpenRouter, so we want the raw "owner/model" form (e.g. "openai/gpt-5.4")
+    # — NOT "openrouter/openai/gpt-5.4", which OpenRouter rejects as
+    # "not a valid model ID".
     base_url = "https://openrouter.ai/api/v1"
+    raw_model = model.split("openrouter/", 1)[1] if model.startswith("openrouter/") else model
+    raw_ground = (
+        ground_model.split("openrouter/", 1)[1]
+        if ground_model.startswith("openrouter/")
+        else ground_model
+    )
     engine_params = {
-        "engine_type": "openrouter",
-        "model": f"openrouter/{model}" if not model.startswith("openrouter/") else model,
+        "engine_type": "open_router",
+        "model": raw_model,
         "base_url": base_url,
         "api_key": api_key,
     }
     engine_params_grounding = {
-        "engine_type": "openrouter",
-        "model": (
-            f"openrouter/{ground_model}"
-            if not ground_model.startswith("openrouter/")
-            else ground_model
-        ),
+        "engine_type": "open_router",
+        "model": raw_ground,
         "base_url": base_url,
         "api_key": api_key,
         "grounding_width": 1920,
@@ -155,7 +161,7 @@ class AgentSRunner(RunnerBase):
             agent = _make_agent(self.model, self.ground_model)
             agent.reset()
         except Exception as e:
-            return RunResult(
+            r = RunResult(
                 task_id=task.id, family=self.family, model=self.model,
                 run_id=run_dir.parent.parent.name,
                 started_at=self.now_iso(), ended_at=self.now_iso(),
@@ -166,6 +172,8 @@ class AgentSRunner(RunnerBase):
                 termination_reason="error",
                 error_message=f"Agent S construction failed: {e}",
             )
+            save_run_artifacts(run_dir, r)
+            return r
 
         # Augment the prompt: instruct the agent to write its final JSON
         # answer to a known file before signaling DONE. (The native
