@@ -60,7 +60,11 @@ def _write_csv(rows: list[dict], path: Path) -> None:
 
 
 def _aggregate_by_model(rows: list[dict]) -> list[dict]:
-    """One summary row per (family, model)."""
+    """One summary row per (family, model).
+
+    Note on tokens: Family B (DETM) doesn't surface token counts (the
+    OpenClaw side hides them). Aggregated `total_*_tokens` will be 0
+    for that family — don't compare across families on this column."""
     groups = defaultdict(list)
     for r in rows:
         groups[(r["family"], r["model"])].append(r)
@@ -68,6 +72,16 @@ def _aggregate_by_model(rows: list[dict]) -> list[dict]:
     for (fam, mdl), trials in sorted(groups.items()):
         n = len(trials)
         n_ok = sum(1 for t in trials if t.get("judge_success"))
+        n_no_json = sum(
+            1 for t in trials
+            if t.get("termination_reason") == "completed_no_json"
+        )
+        n_err = sum(
+            1 for t in trials if t.get("termination_reason") == "error"
+        )
+        n_timeout = sum(
+            1 for t in trials if t.get("termination_reason") == "timeout"
+        )
         scores = [t.get("judge_partial_credit") or 0.0 for t in trials]
         durations = [t.get("duration_s") or 0.0 for t in trials]
         actions = [t.get("n_tool_calls") or 0 for t in trials]
@@ -81,6 +95,9 @@ def _aggregate_by_model(rows: list[dict]) -> list[dict]:
             "avg_duration_s": round(mean(durations) if durations else 0.0, 1),
             "avg_actions": round(mean(actions) if actions else 0.0, 1),
             "avg_messages": round(mean(msgs) if msgs else 0.0, 1),
+            "n_no_json": n_no_json,
+            "n_timeout": n_timeout,
+            "n_error": n_err,
             "total_prompt_tokens": prompt_tok,
             "total_completion_tokens": comp_tok,
         })
@@ -91,6 +108,7 @@ def _markdown_table(by_model: list[dict]) -> str:
     headers = [
         "family", "model", "n_tasks", "n_success", "success_rate",
         "avg_score", "avg_duration_s", "avg_actions", "avg_messages",
+        "n_no_json", "n_timeout", "n_error",
     ]
     lines = ["| " + " | ".join(headers) + " |"]
     lines.append("|" + "|".join(["---"] * len(headers)) + "|")

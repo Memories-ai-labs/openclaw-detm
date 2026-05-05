@@ -167,12 +167,24 @@ def main() -> int:
 
     print(f"\n══════════════════════════════════════════════════════════")
     print(f"Summary for run_id={args.run_id}: {len(summary)} trials")
-    n_success = sum(1 for r in summary if r.judge_success)
-    avg_score = (
-        sum(r.judge_partial_credit or 0 for r in summary) / max(len(summary), 1)
-    )
-    print(f"  success_rate: {n_success}/{len(summary)}")
-    print(f"  avg_score:    {avg_score:.3f}")
+    # Per-(family, model) breakdown — one row each. Aggregating across
+    # ALL trials would mix real and zero-token Families together and
+    # obscure the per-family performance picture.
+    from collections import defaultdict
+    groups: dict[tuple[str, str], list] = defaultdict(list)
+    for r in summary:
+        groups[(r.family, r.model)].append(r)
+    for (fam, mdl), trials in sorted(groups.items()):
+        n = len(trials)
+        n_ok = sum(1 for t in trials if t.judge_success)
+        avg_score = sum(t.judge_partial_credit or 0 for t in trials) / max(n, 1)
+        n_no_json = sum(1 for t in trials if t.termination_reason == "completed_no_json")
+        n_err = sum(1 for t in trials if t.termination_reason == "error")
+        print(
+            f"  {fam:16s} {mdl:25s}  "
+            f"{n_ok}/{n} ok  avg_score={avg_score:.3f}  "
+            f"no_json={n_no_json}  err={n_err}"
+        )
     return 0
 
 

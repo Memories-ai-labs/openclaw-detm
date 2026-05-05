@@ -19,7 +19,6 @@ with our own metrics: actions_taken, latency, thought length.
 """
 from __future__ import annotations
 
-import io
 import json
 import os
 import shutil
@@ -27,7 +26,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .base import RunResult, RunnerBase, TaskSpec, extract_json_block, save_run_artifacts
 
@@ -81,6 +80,20 @@ def _make_agent(model: str, ground_model: str = "bytedance/ui-tars-1.5-7b"):
         )
     if str(AGENT_S_DIR) not in sys.path:
         sys.path.insert(0, str(AGENT_S_DIR))
+
+    # Agent S's grounding.py imports paddleocr in some code paths; on
+    # systems where paddlepaddle isn't installed (no wheels for new
+    # Python versions) those paths blow up at runtime, not import time.
+    # Fail loudly up front so the user knows what to expect.
+    try:
+        import paddleocr  # noqa: F401
+    except Exception:
+        print(
+            "  ⚠ paddleocr/paddlepaddle not installed — Agent S OCR-grounded "
+            "code paths will crash mid-run if hit. (Pure UI-TARS grounding is "
+            "fine.) Install paddlepaddle if you can; benchmarks/baselines/"
+            "agent-s/requirements.txt requires it."
+        )
 
     from gui_agents.s3.agents.agent_s import AgentS3
     from gui_agents.s3.agents.grounding import OSWorldACI
@@ -231,22 +244,40 @@ class AgentSRunner(RunnerBase):
                 if time.time() > deadline:
                     termination = "timeout"
                     break
+                # DONE/FAIL/WAIT are agent-control signals, not real tool
+                # calls — log them but DON'T count toward n_tool_calls (we
+                # want this metric to be apples-to-apples with Family A,
+                # which only counts real Playwright tool invocations).
+                if action == "DONE":
+                    actions_log.append({
+                        "step": step, "n": n_tool_calls, "action": "DONE",
+                    })
+                    signaled = "DONE"
+                    break
+                if action == "FAIL":
+                    actions_log.append({
+                        "step": step, "n": n_tool_calls, "action": "FAIL",
+                    })
+                    signaled = "FAIL"
+                    break
+                if action == "WAIT":
+                    actions_log.append({
+                        "step": step, "n": n_tool_calls, "action": "WAIT",
+                    })
+                    time.sleep(2.0)
+                    continue
+                # Real action — count, log, execute.
                 n_tool_calls += 1
                 actions_log.append({
                     "step": step, "n": n_tool_calls, "action": action[:300],
                 })
-                if action == "DONE":
-                    signaled = "DONE"
-                    break
-                if action == "FAIL":
-                    signaled = "FAIL"
-                    break
-                if action == "WAIT":
-                    time.sleep(2.0)
-                    continue
                 try:
                     _execute_pyautogui(action)
-                    time.sleep(1.0)  # let UI settle
+                    # 0.3s settle (was 1.0s — too aggressive). Most tasks
+                    # need only enough time for the next screenshot to
+                    # show the post-click state; 0.3s is sufficient on
+                    # the local Xvfb display.
+                    time.sleep(0.3)
                 except Exception:
                     pass
                 if n_tool_calls >= task.max_actions:
