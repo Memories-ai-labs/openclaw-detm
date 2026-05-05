@@ -125,22 +125,73 @@ class RunnerBase(ABC):
 # ── JSON extraction ──────────────────────────────────────────────────────
 
 _FENCE_RE = re.compile(r"```(?:json)?\s*\n(.*?)\n```", re.DOTALL)
-_BARE_OBJECT_RE = re.compile(r"(\{[\s\S]*\})", re.DOTALL)
+
+
+def _balanced_objects(text: str) -> list[str]:
+    """Walk `text` and yield every top-level balanced {...} block.
+
+    Skips braces inside string literals (handles \" escapes). Avoids the
+    greedy regex pitfall where `{garbage} ... { real json }` would match
+    everything between the first `{` and last `}`.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] != "{":
+            i += 1
+            continue
+        depth = 0
+        in_str = False
+        esc = False
+        start = i
+        while i < n:
+            c = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            else:
+                if c == '"':
+                    in_str = True
+                elif c == "{":
+                    depth += 1
+                elif c == "}":
+                    depth -= 1
+                    if depth == 0:
+                        out.append(text[start:i + 1])
+                        i += 1
+                        break
+            i += 1
+        else:
+            # Reached end without closing — abandon.
+            break
+    return out
 
 
 def extract_json_block(text: str) -> Optional[dict]:
     """Pull a JSON object out of an agent's final response.
 
-    Tries fenced ```json blocks first, then any balanced object. Returns
-    None if nothing parses.
+    Order of preference:
+      1. The LAST fenced ```json block (agents tend to put their final
+         answer last after some narration).
+      2. Any balanced {...} top-level object that parses, walked left
+         to right — the first one that parses wins.
+
+    Returns None if nothing parses.
     """
     if not text:
         return None
     candidates: list[str] = []
-    candidates.extend(_FENCE_RE.findall(text))
-    bare = _BARE_OBJECT_RE.search(text)
-    if bare:
-        candidates.append(bare.group(1))
+    fences = _FENCE_RE.findall(text)
+    if fences:
+        # Last fence first — that's the most likely "final answer".
+        candidates.append(fences[-1])
+        candidates.extend(reversed(fences[:-1]))
+    candidates.extend(_balanced_objects(text))
     for cand in candidates:
         try:
             return json.loads(cand)
@@ -187,11 +238,6 @@ def save_run_artifacts(
 
 
 # ── Misc ─────────────────────────────────────────────────────────────────
-
-def utc_now_id() -> str:
-    """e.g., '2026-05-05_142530'."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
-
 
 def short_uid(n: int = 8) -> str:
     return uuid.uuid4().hex[:n]

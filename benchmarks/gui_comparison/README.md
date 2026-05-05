@@ -78,41 +78,45 @@ The runners assume a few external pieces are in place:
 ```bash
 # 1. Python deps
 pip install -e .                                       # repo's main pkg
-pip install anthropic httpx pyyaml mcp                 # judge + MCP client
+pip install httpx pyyaml mcp                           # judge + MCP client
 pip install -r benchmarks/baselines/agent-s/requirements.txt  # skip paddle
 
 # 2. Playwright's chrome-for-testing build (for Family A)
 npx @playwright/mcp@latest install-browser chrome-for-testing
 
-# 3. A logged-in Chromium profile for tier-1 LinkedIn tasks (Family A)
+# 3. A logged-in Chromium profile for tier-1 LinkedIn tasks (Family A).
 #    Open a Chromium with the bench profile dir and log in once:
 mkdir -p ~/.bench-chromium-profile
 chromium --user-data-dir=$HOME/.bench-chromium-profile  &
 # (then log in to LinkedIn manually — cookies persist across runs)
 
-# 4. A tmux session running an OpenClaw TUI (for Family B)
-tmux new-session -d -s bench-oc -x 220 -y 60
-tmux send-keys  -t bench-oc "openclaw tui --session bench-fresh" Enter
-
-# 5. DETM daemon reachable at http://127.0.0.1:18790, configured for the
+# 4. DETM daemon reachable at http://127.0.0.1:18790, configured for the
 #    gui_agent model under test (bash backend, openai/gpt-5.4 by default).
+#
+# NOTE: The DETM runner now manages the OpenClaw tmux session itself —
+# you DON'T need to pre-create `bench-oc`. Each task gets a fresh
+# tmux session + a fresh `openclaw tui --session bench-<run>-<task>`
+# so there is no cross-task context bleed across the sweep.
 ```
 
 ## Run
 
 ```bash
 # All families × one model × one task
-BENCH_TMUX_SESSION=bench-oc \
-  python benchmarks/gui_comparison/run_benchmark.py \
+PYTHONPATH=benchmarks python benchmarks/gui_comparison/run_benchmark.py \
     --family detm --family playwright_mcp --family agent_s \
     --models openai/gpt-5.4 --tasks 14 --run-id my-smoke
 
 # Full sweep
-BENCH_TMUX_SESSION=bench-oc \
-  python benchmarks/gui_comparison/run_benchmark.py \
+PYTHONPATH=benchmarks python benchmarks/gui_comparison/run_benchmark.py \
     --family detm --family playwright_mcp --family agent_s \
     --models openai/gpt-5.4 --tasks all --run-id full-2026-05-05
 
-# Aggregate
-python -m gui_comparison.analysis.aggregate full-2026-05-05
+# Aggregate (PYTHONPATH=benchmarks needed for the package import)
+PYTHONPATH=benchmarks python -m gui_comparison.analysis.aggregate full-2026-05-05
 ```
+
+The orchestrator auto-loads the repo-root `.env` so `OPENROUTER_API_KEY`
+gets picked up without manual `source`. Override the tmux session name
+with `BENCH_TMUX_SESSION` if you want something other than the default
+(`bench-oc`).

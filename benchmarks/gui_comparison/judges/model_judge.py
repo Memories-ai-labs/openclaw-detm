@@ -138,7 +138,10 @@ def judge(
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
-                    "HTTP-Referer": "https://github.com/anthropics/openclaw",
+                    # OpenRouter uses these for billing-attribution rankings.
+                    # Set to a neutral local identifier — they don't need to
+                    # resolve to a real URL.
+                    "HTTP-Referer": "https://detm.local/bench",
                     "X-Title": "DETM-bench-judge",
                 },
                 json={

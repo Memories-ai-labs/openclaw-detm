@@ -61,6 +61,15 @@ def _daemon_health() -> dict:
 
 
 def _list_task_ids() -> set[str]:
+    """Snapshot of task ids currently visible to /api/tasks.
+
+    NOTE: DETM's /api/tasks endpoint may paginate / cap at some default
+    limit (we observed 100-ish in practice). This snapshot is used for
+    "primary task" identification only — the metric attribution path
+    (action_details with timestamp filter) doesn't depend on it. So a
+    truncated list at most degrades artifact-copy accuracy, never
+    metrics correctness.
+    """
     try:
         return {t["task_id"] for t in _get_json("/api/tasks")["tasks"]}
     except Exception:
@@ -511,7 +520,11 @@ class DETMRunner(RunnerBase):
                     ad_ts = ad.get("created_at", "")
                     if not ad_ts:
                         continue
-                    if not (action_window_start <= ad_ts <= ended_at):
+                    # Half-open interval [start, end) — excludes the
+                    # boundary so an action_detail at the exact instant
+                    # one task ended and the next began isn't double-
+                    # counted across two adjacent runs.
+                    if not (action_window_start <= ad_ts < ended_at):
                         continue
                     out = ad.get("output_data") or "{}"
                     try:
