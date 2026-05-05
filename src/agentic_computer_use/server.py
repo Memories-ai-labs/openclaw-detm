@@ -230,6 +230,26 @@ TOOLS = [
         },
     ),
 
+    Tool(
+        name="gui_agent_cancel",
+        description=(
+            "Stop an in-flight gui_agent at its next checkpoint (within ~100ms). "
+            "Use when: the user changes priorities and you need to start a new gui_agent on a different task; "
+            "you receive a 'busy' status from gui_agent and decide preemption is the right move; "
+            "or you want to abort a gui_agent that's stuck in a screenshot loop. "
+            "After cancelling, the original caller's gui_agent invocation returns with status='cancelled'. "
+            "Pass exactly one of task_id (cancel that task's gui_agent) or all=true (cancel whatever is running). "
+            "Returns {cancelled: bool, count: int}."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "Cancel the gui_agent attached to this task. Omit to cancel by 'all'."},
+                "all":     {"type": "boolean", "description": "Cancel every active gui_agent. Use when you don't know the active task_id."},
+            },
+        },
+    ),
+
     # ── Vision & Recording ─────────────────────────────────────
     Tool(
         name="desktop_look",
@@ -357,6 +377,7 @@ ROUTE_MAP = {
     "humanize_status": ("GET", "/humanize"),
     "humanize_set": ("POST", "/humanize"),
     "gui_agent": ("POST", "/gui_agent"),
+    "gui_agent_cancel": ("POST", "/gui_agent/cancel"),
     "desktop_look": ("POST", "/desktop_look"),
     "video_record": ("POST", "/video_record"),
     "memory_search": ("POST", "/memory_search"),

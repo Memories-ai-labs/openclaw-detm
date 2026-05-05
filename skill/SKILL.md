@@ -126,7 +126,8 @@ Every `gui_agent` call returns a dict with a `status` field. Branch on it:
 | `error` | false | Infrastructure problem (screenshot failed, API key missing, etc.) | Check daemon health, do not retry until fixed |
 | `max_turns` | false | Supervisor hit internal turn cap without wrapping up | `desktop_look`, treat like `timeout` |
 | `format_error` | false | Supervisor couldn't produce valid tool calls (broken model state) | `desktop_look` to see state; try again with a simpler instruction |
-| `busy` | false | Another gui_agent is already running on this task. You dispatched a second call before the first returned | Wait for the active session's result, then issue your next gui_agent using its `remaining`/`summary` as context. Do NOT fire parallel gui_agent calls on the same task — they scramble UI state |
+| `busy` | false | Another gui_agent is already running (could be on a DIFFERENT task — there is one screen, so all gui_agent calls are globally serial). The response includes `active_task_id`, `active_session_id`, `active_elapsed_s`, `active_instruction` | Two paths: **(a) wait** if the active session is finishing what the user actually wants — poll `task_summary` on `active_task_id` and retry. **(b) preempt** if the user has changed direction — call `gui_agent_cancel(task_id=<active>)` (or `all=true`), wait ~200ms, then retry. Never fire parallel gui_agent calls — they scramble UI state. |
+| `cancelled` | false | A `gui_agent_cancel` call (from you, the dashboard, or another agent) interrupted this run. The screen state is wherever the bash subprocess left it | `desktop_look` to see actual state. If you cancelled it on purpose, proceed with the new task. If the human cancelled via dashboard, stop and ask what they want next. |
 
 **`desktop_look` is your ground truth.** Always prefer it over inferring state from summaries — the screen shows the real state.
 
@@ -157,6 +158,27 @@ status = task_update(task_id=<id>, query="status")
 if status is cancelled or paused → stop immediately
 ```
 This is how the human cancels you from the dashboard.
+
+**6. Concurrency: only one `gui_agent` runs at a time on this box.**
+
+There is one shared X display (`:99`). Two `gui_agent` invocations — even on different `task_id`s — would fight for the same screen and scramble UI state. The daemon enforces this with a global lock: any second call returns `status: "busy"` with the active session's `task_id`, `session_id`, `elapsed_s`, and `instruction` excerpt.
+
+When the user changes direction mid-flight (e.g. you're running a LinkedIn task and they say "no, do this email thing first"), you have two moves:
+
+```
+# (a) wait — the active task is finishing what they actually want.
+#     Poll task_summary on active_task_id; retry your call when it completes.
+
+# (b) preempt — the user wants something else.
+gui_agent_cancel(task_id=<active_task_id>)        # or all=true
+# the active gui_agent returns with status="cancelled" within ~100ms
+# (in-flight bash subprocess gets SIGKILL, in-flight API call cancelled)
+gui_agent(instruction="<the new thing>", task_id=<new_task>, timeout=180)
+```
+
+`gui_agent_cancel` kills the entire gui_agent (the model loop, the in-flight bash subprocess, the in-flight OpenRouter API call). Nothing leaks. After the cancelled call returns, `_active_gui_sessions` is clear — you can immediately start the next gui_agent.
+
+**Dashboard cancels propagate too.** When the human clicks cancel in the dashboard, the same cancel signal fires. Your gui_agent invocation returns with `status: "cancelled"`. Treat that as "human stopped me" — `desktop_look` for ground truth, then ask the user what's next.
 
 ## Choosing the right tool
 
@@ -255,7 +277,8 @@ If reality diverges from the plan, use `task_item_update(status="scrapped")` + `
 - `wait_status` / `wait_update` / `wait_cancel`
 
 ### GUI Agent
-- `gui_agent` — autonomous GUI sub-agent (GPT-5.4 via OpenRouter, with raw shell access for `xdotool`/`wmctrl`/`scrot`). Handles clicks, typing, scrolling, navigation, form filling. Returns `{status, success, summary, actions_taken, actions_log, …}` — branch on `status` (see "Read the `status` field" above).
+- `gui_agent` — autonomous GUI sub-agent (GPT-5.4 via OpenRouter, with raw shell access for `xdotool`/`wmctrl`/`scrot`). Handles clicks, typing, scrolling, navigation, form filling. Returns `{status, success, summary, actions_taken, actions_log, …}` — branch on `status` (see "Read the `status` field" above). One gui_agent at a time, globally — see "Concurrency".
+- `gui_agent_cancel` — preempt the active gui_agent (kills loop + bash subprocess + API call within ~100ms). Pass `task_id=<active>` or `all=true`. The cancelled call returns `status="cancelled"` to its caller.
 
 ### Desktop
 - `desktop_look` — screenshot returned as image (you interpret it)

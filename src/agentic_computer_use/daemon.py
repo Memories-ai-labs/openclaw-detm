@@ -549,13 +549,17 @@ _active_recordings: dict = {}  # task_id -> AsyncRecording
 # Plain dict is safe here: aiohttp runs everything in one event loop, so reads and
 # writes to this map are not concurrent. If you ever add a worker thread, switch
 # to a per-key asyncio.Lock instead.
-_active_gui_sessions: dict[str, str] = {}  # task_id → session_id
-
-# Coarse lock for gui_agent calls without a task_id. Without this, two concurrent
-# untagged invocations both pass the per-task lock check (which requires task_id)
-# and fight over the same screen, scrambling UI state. Tagged calls are still
-# serialized by _active_gui_sessions on a per-task basis.
-_ungated_gui_lock = asyncio.Lock()
+#
+# Invariant: at most ONE entry at any time. There is one shared display :99 on
+# this box, so two parallel gui_agent invocations (even on different task_ids)
+# would scramble each other's UI. Cross-task calls are also rejected with 409
+# busy. The agent decides whether to wait or cancel via gui_agent_cancel.
+#
+# Untagged calls use the synthetic key "__untagged__" so they collide with each
+# other and with tagged calls under the same global rule.
+_UNTAGGED_KEY = "__untagged__"
+_active_gui_sessions: dict[str, dict] = {}
+# task_id (or "__untagged__") → {"session_id": str, "started_at": float, "instruction": str}
 
 
 # ─── Recording handlers ─────────────────────────────────────────
@@ -1110,21 +1114,29 @@ async def handle_gui_agent(request: web.Request) -> web.Response:
     from .live_ui.session import LiveUISession
     from . import db as _db
 
-    # Per-task serialization: reject if another gui_agent is already running on this task.
-    # The caller should await the in-flight result before issuing the next invocation.
-    # Parallel supervisors on the same screen scramble UI state and can crash the browser.
-    if task_id and task_id in _active_gui_sessions:
-        active_sid = _active_gui_sessions[task_id]
+    # Global serialization: only ONE gui_agent runs at a time, regardless of task_id.
+    # The single shared display :99 means parallel calls scramble UI state. Caller
+    # decides: await the active result, or cancel it via gui_agent_cancel and retry.
+    if _active_gui_sessions:
+        active_key, active_rec = next(iter(_active_gui_sessions.items()))
+        elapsed_s = round(time.time() - active_rec["started_at"], 1)
+        active_task_id = None if active_key == _UNTAGGED_KEY else active_key
+        active_sid = active_rec["session_id"]
         return web.json_response({
             "success": False,
             "status": "busy",
-            "error": "another gui_agent is already running on this task",
+            "error": "another gui_agent is already running",
             "summary": (
-                f"Rejected: gui_agent session {active_sid} is already running on task {task_id}. "
-                "Await that result (it will return a status dict) before issuing the next gui_agent call. "
-                "Parallel supervisors on the same screen corrupt UI state."
+                f"Rejected: gui_agent session {active_sid[:8]} has been running for {elapsed_s}s "
+                f"on task={active_task_id or '<untagged>'}: {active_rec['instruction'][:120]!r}. "
+                "To wait, retry after task_summary shows it completed. "
+                "To preempt, call gui_agent_cancel and retry."
             ),
             "active_session_id": active_sid,
+            "active_task_id": active_task_id,
+            "active_started_at": active_rec["started_at"],
+            "active_elapsed_s": elapsed_s,
+            "active_instruction": active_rec["instruction"][:200],
             "actions_taken": 0,
             "actions_log": [],
         }, status=409)
@@ -1143,14 +1155,13 @@ async def handle_gui_agent(request: web.Request) -> web.Response:
         timeout=timeout,
     )
 
-    if task_id:
-        _active_gui_sessions[task_id] = session_id
-    # Untagged calls bypass _active_gui_sessions (which is keyed by task_id).
-    # Hold a coarse global lock so they don't race each other on the screen.
-    ungated_cm = _ungated_gui_lock if not task_id else None
+    registry_key = task_id or _UNTAGGED_KEY
+    _active_gui_sessions[registry_key] = {
+        "session_id": session_id,
+        "started_at": time.time(),
+        "instruction": instruction,
+    }
     try:
-        if ungated_cm is not None:
-            await ungated_cm.acquire()
         result = await provider.run(
             instruction=instruction,
             timeout=timeout,
@@ -1160,10 +1171,7 @@ async def handle_gui_agent(request: web.Request) -> web.Response:
             session=session,
         )
     finally:
-        if task_id:
-            _active_gui_sessions.pop(task_id, None)
-        if ungated_cm is not None and ungated_cm.locked():
-            ungated_cm.release()
+        _active_gui_sessions.pop(registry_key, None)
 
     result["session_id"] = session_id
 
@@ -1312,7 +1320,7 @@ async def handle_api_live_session_events_stream(request: web.Request) -> web.Str
                         except Exception:
                             pass
             # Terminate if session is no longer active and no terminal event was found
-            active = any(sid == session_id for sid in _active_gui_sessions.values())
+            active = any(rec.get("session_id") == session_id for rec in _active_gui_sessions.values())
             if not active and events_path.exists():
                 # Session ended without terminal event (crash) — stop streaming
                 break
@@ -1343,7 +1351,7 @@ async def handle_api_live_session_audio_stream(request: web.Request) -> web.Stre
                 if new_data:
                     await response.write(new_data)
                     offset += len(new_data)
-            active = any(sid == session_id for sid in _active_gui_sessions.values())
+            active = any(rec.get("session_id") == session_id for rec in _active_gui_sessions.values())
             if not active and (not pcm_path.exists() or pcm_path.stat().st_size <= offset):
                 break
             await asyncio.sleep(0.05)
