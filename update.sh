@@ -82,6 +82,8 @@ if [ "$CHECK_ONLY" = "1" ]; then
 fi
 
 # ── 3. Pull (only if there's something to pull) ──────────────────
+GATEWAY_RELOAD_NEEDED=0
+GATEWAY_RELOAD_REASON=""
 if [ "$AHEAD" -gt 0 ]; then
     if ! git diff --quiet || ! git diff --cached --quiet; then
         warn "Working tree has uncommitted changes — git pull --rebase may conflict."
@@ -91,6 +93,18 @@ if [ "$AHEAD" -gt 0 ]; then
     step "Pulling $AHEAD commit(s)"
     git pull --rebase --quiet origin "$(git rev-parse --abbrev-ref HEAD)"
     ok "Now at $(git log -1 --format='%h %s' HEAD)"
+
+    # Detect whether the pull touched anything OpenClaw caches per-session.
+    # SKILL.md and server.py are loaded once when the gateway spawns the MCP
+    # server; the in-flight session uses the OLD copies until the gateway
+    # reloads. update.sh's daemon restart doesn't cover that.
+    NEW_HEAD=$(git rev-parse HEAD)
+    CHANGED_FILES=$(git diff --name-only "$LOCAL..$NEW_HEAD" 2>/dev/null || true)
+    CHANGED_INTERESTING=$(echo "$CHANGED_FILES" | grep -E '^(skill/SKILL\.md|src/agentic_computer_use/server\.py)$' || true)
+    if [ -n "$CHANGED_INTERESTING" ]; then
+        GATEWAY_RELOAD_NEEDED=1
+        GATEWAY_RELOAD_REASON=$(echo "$CHANGED_INTERESTING" | tr '\n' ' ' | sed 's/ $//')
+    fi
 fi
 
 # ── 3.5. Audit existing systemd unit for stale env vars ─────────
@@ -176,6 +190,15 @@ if [ -x "$REPO_DIR/bin/detm-doctor" ]; then
         err "Doctor reports failures (see above) — investigate before relying on the upgrade"
         exit "$DOC_RC"
     fi
+fi
+
+if [ "$GATEWAY_RELOAD_NEEDED" = "1" ]; then
+    echo
+    warn "This pull changed: $GATEWAY_RELOAD_REASON"
+    warn "OpenClaw's gateway caches SKILL.md and the MCP tool list per session."
+    warn "Restart the gateway when convenient so the new behavior takes effect:"
+    warn "    systemctl --user restart openclaw-gateway"
+    warn "(Your current MCP session keeps working until you do — only daemon code is live now.)"
 fi
 
 echo
