@@ -26,7 +26,7 @@ from typing import Optional
 
 import httpx
 
-JUDGE_MODEL = os.environ.get("BENCH_JUDGE_MODEL", "anthropic/claude-haiku-4-5")
+JUDGE_MODEL = os.environ.get("BENCH_JUDGE_MODEL", "anthropic/claude-opus-4-7")
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 _SYSTEM = """You are a strict, conservative judge for a GUI agent benchmark.
