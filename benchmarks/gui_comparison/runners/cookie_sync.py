@@ -1,171 +1,296 @@
-"""Sync cookies from the user's main Chrome profile (the one DETM
-operates on display :99) into the bench Chromium profile that
-Playwright MCP uses.
+"""Export Chrome's cookies as a Playwright `storage state` JSON.
 
-Why this matters: Family A (Playwright MCP) and Family B (DETM) need to
-hit the same logged-in state for tier-1 LinkedIn tasks to be a fair
-comparison. DETM uses whatever Chrome is up on :99; that profile lives
-at ~/.config/google-chrome/. Playwright MCP launches its own Chromium
-with --user-data-dir=~/.bench-chromium-profile/. Without sync,
-Playwright sees a cookieless browser and hits the LinkedIn login wall.
+Why not just copy the Cookies sqlite file?
+  - Chrome on Linux uses v11 encryption: AES-128-CBC with a key from
+    libsecret/gnome-keyring (NOT the hardcoded "peanuts" key from v10).
+  - When Playwright Chromium opens a copied profile, it tries the same
+    keyring lookup. Even if libsecret is available, Chromium can't
+    locate the right entry and silently DROPS every encrypted cookie.
+  - Result: the bench profile ends up with only unencrypted cookies
+    (e.g. `bcookie`), and tier-1 LinkedIn tasks hit the auth wall.
 
-Cookies in Chrome are encrypted with a key in `Local State` derived
-from the OS user keyring. Both Chromium instances run as the same user
-so the same keyring backs them — copying `Local State` along with
-`Cookies` lets the bench Chromium decrypt the copied cookies.
+Solution: decrypt cookies in Python (using the keyring entry directly),
+write a Playwright storage-state JSON, and pass `--storage-state PATH`
+to @playwright/mcp. Playwright loads pre-decrypted cookies into the
+context — no re-encryption / keyring lookup needed.
 
-Caveats:
-  - If the source Chrome is actively writing the Cookies file at the
-    moment of copy, you may get a slightly stale snapshot. SQLite read
-    locks don't block reads, so we won't corrupt anything.
-  - If the bench Chromium is RUNNING, do not call this — it holds an
-    exclusive lock and you'll get permission errors. The runner cleans
-    up its Chromium between trials, so calling sync between sweeps is
-    safe.
-  - Copies the leveldb-based local storage dirs too (best-effort), so
-    auth-token-based sites (some Google services) survive.
-
-Usage as a CLI:
-    python -m gui_comparison.runners.cookie_sync                    # sync once
-    python -m gui_comparison.runners.cookie_sync --check            # report only
-    python -m gui_comparison.runners.cookie_sync --src PATH --dst PATH  # custom
+Usage:
+  python -m gui_comparison.runners.cookie_sync                # export
+  python -m gui_comparison.runners.cookie_sync --check        # report
+  python -m gui_comparison.runners.cookie_sync --out PATH     # custom path
+  python -m gui_comparison.runners.cookie_sync --src PATH     # custom Chrome
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Optional
 
 DEFAULT_SRC = Path.home() / ".config/google-chrome"
-DEFAULT_DST = Path(os.environ.get(
-    "BENCH_CHROMIUM_PROFILE",
-    str(Path.home() / ".bench-chromium-profile"),
+# Per-profile storage state lives next to the bench profile dir.
+DEFAULT_OUT = Path(os.environ.get(
+    "BENCH_STORAGE_STATE",
+    str(Path.home() / ".bench-storage-state.json"),
 ))
 
-# Auth-relevant files to mirror src → dst.
-# `Local State` is at the profile root (NOT under Default/) and holds
-# the encryption key. Without it, the copied Cookies are unreadable.
-_FILES = [
-    ("Local State", False),                    # path, is_dir
-    ("Default/Cookies", False),
-    ("Default/Login Data", False),
-    ("Default/Local Storage/leveldb", True),   # for token-based sites
-    ("Default/Session Storage", True),
-]
+# Chrome's epoch is 1601-01-01 UTC; unix epoch is 1970-01-01.
+# Chrome stores expires_utc as microseconds since 1601.
+_CHROME_TO_UNIX_OFFSET_S = 11644473600
 
 
-def _bench_chromium_running(dst: Path) -> bool:
-    """Heuristic: if a SingletonLock pid file exists and points at a live
-    process, the profile is in use."""
-    lock = dst / "SingletonLock"
-    if not lock.is_symlink() and not lock.exists():
-        return False
+# ── Decryption ───────────────────────────────────────────────────────────
+
+def _get_keyring_password(label: str = "Chrome Safe Storage") -> Optional[bytes]:
+    """Pull Chrome's encryption secret from libsecret / gnome-keyring."""
     try:
-        target = os.readlink(lock) if lock.is_symlink() else None
-        # Symlink format is "hostname-pid".
-        if target and "-" in target:
-            pid = int(target.rsplit("-", 1)[-1])
-            os.kill(pid, 0)  # Raises if no such process
-            return True
-    except (OSError, ValueError):
-        pass
-    return False
-
-
-def _count_cookies(db_path: Path) -> tuple[int, int]:
-    """Returns (total_cookies, linkedin_cookies). 0,0 if anything fails."""
-    if not db_path.exists():
-        return 0, 0
+        import secretstorage
+    except ImportError:
+        return None
     try:
-        # Copy first to avoid sqlite lock contention.
-        tmp = Path(f"/tmp/_cookies_inspect_{os.getpid()}.db")
-        shutil.copy2(db_path, tmp)
+        bus = secretstorage.dbus_init()
+        for col in secretstorage.get_all_collections(bus):
+            for item in col.get_all_items():
+                if item.get_label() == label:
+                    return item.get_secret()
+    except Exception:
+        return None
+    return None
+
+
+def _derive_key(password: bytes) -> bytes:
+    """Chrome on Linux: PBKDF2-SHA1(password, 'saltysalt', 1 iteration, 16 bytes)."""
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
+    return PBKDF2HMAC(
+        algorithm=hashes.SHA1(),
+        length=16,
+        salt=b"saltysalt",
+        iterations=1,
+    ).derive(password)
+
+
+def _decrypt_value(encrypted: bytes,
+                   keyring_key: Optional[bytes],
+                   basic_key: bytes) -> Optional[bytes]:
+    """Decrypt a single Chrome cookie. Returns plaintext bytes or None."""
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+    if not encrypted:
+        return b""
+    prefix = encrypted[:3]
+    if prefix not in (b"v10", b"v11"):
+        # Unencrypted (older Chrome / some platforms). Take as-is.
+        return encrypted
+    body = encrypted[3:]
+    iv = b" " * 16
+    # v10 → basic key; v11 → keyring key.
+    candidates: list[bytes] = []
+    if prefix == b"v10":
+        candidates.append(basic_key)
+    elif prefix == b"v11" and keyring_key is not None:
+        candidates.append(keyring_key)
+    # Always try basic_key as fallback (some setups encrypt v11 with peanuts).
+    if basic_key not in candidates:
+        candidates.append(basic_key)
+    for key in candidates:
+        try:
+            d = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+            plain = d.update(body) + d.finalize()
+            if not plain:
+                continue
+            pad = plain[-1]
+            if pad < 1 or pad > 16:
+                continue
+            plain = plain[:-pad]
+            # v11 prepends a 32-byte SHA256 integrity hash — strip it.
+            if prefix == b"v11" and len(plain) >= 32:
+                plain = plain[32:]
+            return plain
+        except Exception:
+            continue
+    return None
+
+
+# ── Cookie → storage state row conversion ────────────────────────────────
+
+_SAMESITE_MAP = {
+    -1: "None", 0: "None", 1: "None", 2: "Lax", 3: "Strict",
+}
+
+
+def _chrome_expires_to_unix(expires_utc: int) -> float:
+    """Chrome microseconds since 1601 → unix seconds. Returns -1 for
+    session cookies (expires_utc == 0)."""
+    if not expires_utc:
+        return -1
+    return (expires_utc / 1_000_000) - _CHROME_TO_UNIX_OFFSET_S
+
+
+def _row_to_cookie(row: sqlite3.Row, keyring_key: Optional[bytes],
+                   basic_key: bytes) -> Optional[dict]:
+    enc = row["encrypted_value"]
+    if not enc and not row["value"]:
+        return None
+    if enc:
+        plain = _decrypt_value(enc, keyring_key, basic_key)
+        if plain is None:
+            return None
+        try:
+            value = plain.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    else:
+        value = row["value"]
+
+    return {
+        "name": row["name"],
+        "value": value,
+        "domain": row["host_key"],
+        "path": row["path"],
+        "expires": _chrome_expires_to_unix(row["expires_utc"]),
+        "httpOnly": bool(row["is_httponly"]),
+        "secure": bool(row["is_secure"]),
+        "sameSite": _SAMESITE_MAP.get(row["samesite"], "Lax"),
+    }
+
+
+# ── Public API ───────────────────────────────────────────────────────────
+
+def export_storage_state(
+    src: Path = DEFAULT_SRC,
+    out_path: Path = DEFAULT_OUT,
+    verbose: bool = True,
+) -> int:
+    """Decrypt every cookie in src/Default/Cookies and write a Playwright
+    storage state JSON to out_path. Returns the number of cookies exported.
+    """
+    cookies_db = src / "Default" / "Cookies"
+    if not cookies_db.exists():
+        raise RuntimeError(f"Source Chrome cookies not found at {cookies_db}")
+
+    keyring_key_raw = _get_keyring_password("Chrome Safe Storage")
+    if keyring_key_raw is None and verbose:
+        print("  ⚠ Chrome Safe Storage not found in libsecret — v11 cookies "
+              "may fail to decrypt (you'll get unencrypted cookies only).")
+
+    keyring_key = _derive_key(keyring_key_raw) if keyring_key_raw else None
+    basic_key = _derive_key(b"peanuts")
+
+    # Snapshot the sqlite to avoid lock contention with running Chrome.
+    tmp = Path(f"/tmp/_cookies_export_{os.getpid()}.db")
+    shutil.copy2(cookies_db, tmp)
+    try:
+        con = sqlite3.connect(str(tmp))
+        con.row_factory = sqlite3.Row
+        rows = con.execute("""
+            SELECT host_key, name, value, encrypted_value, path,
+                   expires_utc, is_httponly, is_secure, samesite
+            FROM cookies
+        """).fetchall()
+        con.close()
+    finally:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+    cookies = []
+    n_total = 0
+    n_decrypted = 0
+    n_skipped = 0
+    for row in rows:
+        n_total += 1
+        c = _row_to_cookie(row, keyring_key, basic_key)
+        if c is None:
+            n_skipped += 1
+            continue
+        n_decrypted += 1
+        cookies.append(c)
+
+    state = {"cookies": cookies, "origins": []}
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(state, indent=2))
+    out_path.chmod(0o600)
+
+    if verbose:
+        n_li = sum(1 for c in cookies if "linkedin" in c["domain"])
+        n_li_at = sum(1 for c in cookies
+                      if "linkedin" in c["domain"] and c["name"] == "li_at")
+        print(f"  exported {n_decrypted}/{n_total} cookies "
+              f"({n_li} linkedin, li_at={'yes' if n_li_at else 'NO'}) → {out_path}")
+        if n_skipped:
+            print(f"  skipped {n_skipped} cookies (decryption failed or empty)")
+    return n_decrypted
+
+
+def report(src: Path = DEFAULT_SRC, out_path: Path = DEFAULT_OUT) -> None:
+    cookies_db = src / "Default" / "Cookies"
+    if cookies_db.exists():
+        # Quick sqlite count.
+        tmp = Path(f"/tmp/_cookies_report_{os.getpid()}.db")
+        shutil.copy2(cookies_db, tmp)
         try:
             con = sqlite3.connect(str(tmp))
-            cur = con.cursor()
-            total = cur.execute("SELECT COUNT(*) FROM cookies").fetchone()[0]
-            li = cur.execute(
+            total = con.execute("SELECT COUNT(*) FROM cookies").fetchone()[0]
+            li = con.execute(
                 "SELECT COUNT(*) FROM cookies WHERE host_key LIKE '%linkedin%'"
             ).fetchone()[0]
+            li_at = con.execute(
+                "SELECT COUNT(*) FROM cookies WHERE name='li_at'"
+            ).fetchone()[0]
             con.close()
-            return total, li
+            print(f"  Source Chrome    ({src}):  {total} cookies, "
+                  f"{li} linkedin, li_at={'yes' if li_at else 'NO'}")
         finally:
             try:
                 tmp.unlink()
             except FileNotFoundError:
                 pass
-    except Exception:
-        return 0, 0
+    else:
+        print(f"  Source Chrome    ({src}):  (no Cookies file)")
 
-
-def report(src: Path = DEFAULT_SRC, dst: Path = DEFAULT_DST) -> None:
-    src_total, src_li = _count_cookies(src / "Default/Cookies")
-    dst_total, dst_li = _count_cookies(dst / "Default/Cookies")
-    print(f"  Source Chrome     ({src}):  {src_total} cookies, {src_li} linkedin")
-    print(f"  Bench Chromium    ({dst}):  {dst_total} cookies, {dst_li} linkedin")
-    if _bench_chromium_running(dst):
-        print(f"  ⚠ Bench Chromium appears to be RUNNING — sync will fail")
-
-
-def sync(src: Path = DEFAULT_SRC, dst: Path = DEFAULT_DST,
-         verbose: bool = True) -> None:
-    """Copy cookies + encryption state from src → dst. Bench Chromium
-    must NOT be running."""
-    if _bench_chromium_running(dst):
-        raise RuntimeError(
-            f"Bench Chromium profile {dst} is in use. Stop Playwright MCP "
-            f"or close the Chromium window, then re-run."
-        )
-    if not src.exists():
-        raise RuntimeError(f"Source Chrome profile not found at {src}")
-    dst.mkdir(parents=True, exist_ok=True)
-
-    copied = 0
-    for rel, is_dir in _FILES:
-        s = src / rel
-        d = dst / rel
-        if not s.exists():
-            if verbose:
-                print(f"  skip (missing): {rel}")
-            continue
-        d.parent.mkdir(parents=True, exist_ok=True)
+    if out_path.exists():
         try:
-            if is_dir:
-                if d.exists():
-                    shutil.rmtree(d)
-                shutil.copytree(s, d)
-            else:
-                shutil.copy2(s, d)
-            copied += 1
-            if verbose:
-                print(f"  ✓ {rel}")
+            state = json.loads(out_path.read_text())
+            cs = state.get("cookies") or []
+            li = sum(1 for c in cs if "linkedin" in c.get("domain", ""))
+            li_at = sum(1 for c in cs
+                        if c.get("name") == "li_at" and "linkedin" in c.get("domain", ""))
+            print(f"  Storage state    ({out_path}):  {len(cs)} cookies, "
+                  f"{li} linkedin, li_at={'yes' if li_at else 'NO'}")
         except Exception as e:
-            if verbose:
-                print(f"  ✗ {rel}: {e}")
+            print(f"  Storage state    ({out_path}):  unreadable ({e})")
+    else:
+        print(f"  Storage state    ({out_path}):  (does not exist)")
 
-    if verbose:
-        print(f"\nSynced {copied}/{len(_FILES)} entries.")
-        report(src, dst)
+
+# Backward-compat alias for the previous file-copy API name.
+def sync(*args, **kwargs):
+    """Deprecated alias — calls export_storage_state."""
+    return export_storage_state(*args, **kwargs)
 
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="Sync Chrome cookies → bench Chromium")
-    p.add_argument("--src", type=Path, default=DEFAULT_SRC,
-                   help=f"Source Chrome profile dir (default: {DEFAULT_SRC})")
-    p.add_argument("--dst", type=Path, default=DEFAULT_DST,
-                   help=f"Bench Chromium profile dir (default: {DEFAULT_DST})")
+    p = argparse.ArgumentParser(
+        description="Export Chrome cookies as a Playwright storage state JSON"
+    )
+    p.add_argument("--src", type=Path, default=DEFAULT_SRC)
+    p.add_argument("--out", type=Path, default=DEFAULT_OUT,
+                   help=f"Path to write storage state (default: {DEFAULT_OUT})")
     p.add_argument("--check", action="store_true",
-                   help="Report cookie counts in both profiles, don't copy")
+                   help="Report cookie counts, don't export")
     args = p.parse_args()
 
     if args.check:
-        report(args.src, args.dst)
+        report(args.src, args.out)
         return 0
     try:
-        sync(args.src, args.dst)
+        export_storage_state(args.src, args.out)
+        report(args.src, args.out)
         return 0
     except RuntimeError as e:
         print(f"\n✗ {e}", file=sys.stderr)

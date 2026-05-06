@@ -44,6 +44,10 @@ PROFILE_DIR = Path(os.environ.get(
     "BENCH_CHROMIUM_PROFILE",
     os.path.expanduser("~/.bench-chromium-profile"),
 ))
+STORAGE_STATE = Path(os.environ.get(
+    "BENCH_STORAGE_STATE",
+    os.path.expanduser("~/.bench-storage-state.json"),
+))
 DISPLAY = os.environ.get("BENCH_DISPLAY", ":99")
 # Headed by default so the user can watch and so screenshots reflect a
 # realistic viewport. Set BENCH_PLAYWRIGHT_HEADLESS=1 for tier-3 tasks
@@ -106,60 +110,59 @@ class PlaywrightMCPRunner(RunnerBase):
         self._maybe_sync_cookies()
 
     def _maybe_sync_cookies(self) -> None:
-        """Copy cookies from the user's main Chrome profile (the one DETM
-        uses on :99) into the bench Chromium profile so both families
-        start from the same logged-in state. One-shot per process."""
+        """Decrypt cookies from the user's main Chrome profile (the one
+        DETM uses on :99) and write a Playwright storage state JSON, so
+        both families start from the same logged-in state. We pass the
+        JSON to @playwright/mcp via --storage-state. One-shot per process.
+
+        This used to file-copy cookies into the bench Chromium profile.
+        That doesn't work because Chromium silently drops cookies it can't
+        decrypt (Chrome v11 cookies need libsecret keyring access — the
+        bench Chromium can't find the right keyring entry). Exporting
+        decrypted cookies as a storage state bypasses that entirely."""
         if PlaywrightMCPRunner._cookies_synced:
             return
         if os.environ.get("BENCH_SKIP_COOKIE_SYNC") == "1":
-            print("  (skipping cookie sync — BENCH_SKIP_COOKIE_SYNC=1)")
+            print("  (skipping cookie export — BENCH_SKIP_COOKIE_SYNC=1)")
             PlaywrightMCPRunner._cookies_synced = True
             return
         try:
             from . import cookie_sync
-            print("  syncing Chrome cookies → bench Chromium profile...")
-            cookie_sync.sync(verbose=True)
+            print("  exporting Chrome cookies → Playwright storage state...")
+            cookie_sync.export_storage_state(verbose=True)
         except RuntimeError as e:
-            # Bench Chromium running, or source profile missing — warn but
-            # don't fail; LinkedIn tasks may still hit login wall.
-            print(f"  ⚠ cookie sync failed: {e}")
+            print(f"  ⚠ cookie export failed: {e}")
         except Exception as e:
-            print(f"  ⚠ cookie sync raised: {e}")
+            print(f"  ⚠ cookie export raised: {e}")
         PlaywrightMCPRunner._cookies_synced = True
 
     def _check_linkedin_login(self) -> str | None:
-        """Return None if the bench Chromium profile has a LinkedIn
-        session cookie (li_at), else a human-readable error message.
+        """Return None if the exported storage state contains a LinkedIn
+        `li_at` session cookie, else a human-readable error message.
         Used as a preflight for tier-1 tasks that declare
         needs_logged_in_linkedin: true."""
-        cookies_db = PROFILE_DIR / "Default" / "Cookies"
-        if not cookies_db.exists():
+        if not STORAGE_STATE.exists():
             return (
-                f"Bench Chromium profile {PROFILE_DIR} has no Cookies file — "
-                f"never been logged in. Run cookie sync (auto-runs at "
-                f"orchestrator start) or log in manually."
+                f"No storage state at {STORAGE_STATE}. Cookie export "
+                f"didn't run or failed. Run "
+                f"`python -m gui_comparison.runners.cookie_sync` manually "
+                f"to investigate."
             )
-        import sqlite3 as _sql
         try:
-            tmp = Path(f"/tmp/_bench_cookies_check_{os.getpid()}.db")
-            shutil.copy2(cookies_db, tmp)
-            con = _sql.connect(str(tmp))
-            n = con.execute(
-                "SELECT COUNT(*) FROM cookies "
-                "WHERE host_key LIKE '%linkedin%' AND name='li_at'"
-            ).fetchone()[0]
-            con.close()
-            tmp.unlink()
-            if n == 0:
-                return (
-                    f"No LinkedIn 'li_at' session cookie in bench profile. "
-                    f"Cookie sync may have run but LinkedIn-side cookie wasn't "
-                    f"picked up. Log in to LinkedIn manually in the source "
-                    f"Chrome (the one on :99) and re-run."
-                )
+            state = json.loads(STORAGE_STATE.read_text())
+            for c in (state.get("cookies") or []):
+                if (c.get("name") == "li_at"
+                        and "linkedin" in (c.get("domain") or "")):
+                    return None
+            return (
+                f"No LinkedIn 'li_at' session cookie in {STORAGE_STATE}. "
+                f"You're probably not logged into LinkedIn in the source "
+                f"Chrome on :99. Log in there once (cookies persist), then "
+                f"re-run the orchestrator (cookie export will pick it up "
+                f"on the next start)."
+            )
         except Exception as e:
-            return f"Couldn't read bench Cookies DB: {e}"
-        return None
+            return f"Couldn't read storage state: {e}"
 
     def run(self, task: TaskSpec, run_dir: Path) -> RunResult:
         # Tier-1 tasks declare needs_logged_in_linkedin: true. Preflight
@@ -218,6 +221,11 @@ class PlaywrightMCPRunner(RunnerBase):
         ]
         if HEADLESS:
             playwright_args.append("--headless")
+        # Use the storage state JSON exported from the user's main Chrome
+        # so we land in linkedin etc. already logged in. Skip if it
+        # doesn't exist (cookie sync may have been skipped).
+        if STORAGE_STATE.exists():
+            playwright_args += ["--storage-state", str(STORAGE_STATE)]
         server = StdioServerParameters(
             command="npx",
             args=playwright_args,
