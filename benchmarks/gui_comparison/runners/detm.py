@@ -20,9 +20,12 @@ The pipeline:
      (action_details → n_tool_calls).
   6. Write everything into the run dir per base.save_run_artifacts.
 
-The runner does NOT cancel the task on timeout — it returns whatever
-the agent produced, marks termination_reason="timeout", and lets the
-judge decide whether the partial answer was salvageable.
+The runner DOES cancel any in-flight gui_agent at the start of each
+trial (via /gui_agent/cancel?all=true) and again after _wait_for_sentinel
+returns, so a still-navigating agent doesn't bleed into the next task.
+On timeout we return whatever the agent produced and mark
+termination_reason="timeout"; the judge decides whether the partial
+answer was salvageable.
 """
 from __future__ import annotations
 
@@ -42,7 +45,10 @@ from .base import RunResult, RunnerBase, TaskSpec, extract_json_block, save_run_
 
 
 DAEMON_URL = os.environ.get("DETM_DAEMON_URL", "http://127.0.0.1:18790")
-TMUX_SESSION = os.environ.get("BENCH_TMUX_SESSION", "oc-test")
+# Default to "bench-oc" — this is what the README documents and what we
+# actually use in smokes. The runner kills+recreates this session per
+# task, so it doesn't need to pre-exist.
+TMUX_SESSION = os.environ.get("BENCH_TMUX_SESSION", "bench-oc")
 DISPLAY = os.environ.get("BENCH_DISPLAY", ":99")
 DETM_DATA_DIR = Path(os.environ.get(
     "DETM_DATA_DIR", os.path.expanduser("~/.agentic-computer-use")
@@ -61,19 +67,23 @@ def _daemon_health() -> dict:
 
 
 def _list_task_ids() -> set[str]:
-    """Snapshot of task ids currently visible to /api/tasks.
+    """Snapshot of every task id visible to /api/tasks across all statuses.
 
-    NOTE: DETM's /api/tasks endpoint may paginate / cap at some default
-    limit (we observed 100-ish in practice). This snapshot is used for
-    "primary task" identification only — the metric attribution path
-    (action_details with timestamp filter) doesn't depend on it. So a
-    truncated list at most degrades artifact-copy accuracy, never
-    metrics correctness.
+    The daemon's /api/tasks defaults to status=active, limit=20. We need
+    the full set to do correct before/after diffing AND correct action-
+    detail attribution (we previously assumed action attribution didn't
+    depend on this — that was wrong; if a task isn't in our set, we never
+    fetch its action_details). So we explicitly query each status with a
+    high limit to get the full picture.
     """
-    try:
-        return {t["task_id"] for t in _get_json("/api/tasks")["tasks"]}
-    except Exception:
-        return set()
+    ids: set[str] = set()
+    for status in ("active", "completed", "failed", "cancelled", "paused", "pending"):
+        try:
+            r = _get_json(f"/api/tasks?status={status}&limit=10000")
+            ids.update(t["task_id"] for t in r.get("tasks", []))
+        except Exception:
+            continue
+    return ids
 
 
 def _get_task(task_id: str) -> Optional[dict]:
@@ -363,14 +373,24 @@ class DETMRunner(RunnerBase):
     def _build_prompt(self, task: TaskSpec, sentinel: str) -> str:
         # Note: returned newlines will be flattened by _tmux_paste_prompt
         # into "  //  " separators; the LLM can still parse the structure.
+        # Wraps the answer in <<<BENCH_ANSWER_START>>> / <<<BENCH_ANSWER_END>>>
+        # markers so the runner can extract just the final answer (not the
+        # entire tmux scrollback including the prompt itself).
         return (
             f"DETM ONLY\n"
             f"{task.prompt}\n"
             f"---\n"
             f"When you finish the task (success OR failure), produce your "
-            f"final JSON answer in a ```json fenced code block, then on its "
-            f"own line type exactly: {sentinel} . "
-            f"Do not type that sentinel string before you are completely done with the task."
+            f"final JSON answer wrapped in these EXACT markers, each on "
+            f"their own line:\n"
+            f"<<<BENCH_ANSWER_START>>>\n"
+            f"```json\n"
+            f"{{... your JSON answer here ...}}\n"
+            f"```\n"
+            f"<<<BENCH_ANSWER_END>>>\n"
+            f"Then on a new line type exactly: {sentinel}\n"
+            f"Do not type {sentinel} before you have produced both markers "
+            f"and the JSON between them. Do not abbreviate the markers."
         )
 
     def _wait_for_sentinel(
@@ -399,24 +419,46 @@ class DETMRunner(RunnerBase):
             time.sleep(2.0)
         return last_pane, False
 
-    @staticmethod
-    def _extract_final_text(pane: str, sentinel: str, baseline_len: int = 0) -> str:
-        """Pull the chunk of pane text just before the sentinel — that's
-        the agent's final response.
+    _ANSWER_START_MARKER = "<<<BENCH_ANSWER_START>>>"
+    _ANSWER_END_MARKER = "<<<BENCH_ANSWER_END>>>"
 
-        baseline_len is the byte-length of the pane when we first saw it
-        right after pasting the prompt. We search for the sentinel only
-        in pane[baseline_len:] so we never match on the sentinel string
-        embedded in our own prompt instruction (or on a sentinel the
-        agent narrated mid-thought before completing).
+    @classmethod
+    def _extract_final_text(cls, pane: str, sentinel: str, baseline_len: int = 0) -> str:
+        """Pull just the agent's final-answer block out of the tmux pane.
+
+        Strategy (most-specific to most-fallback):
+          1. Find the LAST occurrence of <<<BENCH_ANSWER_END>>> — the agent
+             emitted it after their answer (the prompt also contains the
+             marker as part of the instruction, but the agent's output is
+             always after the prompt).
+          2. Walk backward to the matching <<<BENCH_ANSWER_START>>> and
+             extract between them.
+          3. If markers aren't found, fall back to the old "search past
+             baseline_len for sentinel" approach.
+          4. If even that fails, return the last 4000 chars.
+
+        The baseline-length approach is fragile (tmux can redraw and shift
+        offsets), so the marker-based path is preferred.
         """
+        # Strategy 1: marker-based extraction.
+        end_idx = pane.rfind(cls._ANSWER_END_MARKER)
+        if end_idx != -1:
+            # Find the matching START marker before this END.
+            start_search_region = pane[:end_idx]
+            start_idx = start_search_region.rfind(cls._ANSWER_START_MARKER)
+            if start_idx != -1:
+                inner_start = start_idx + len(cls._ANSWER_START_MARKER)
+                return pane[inner_start:end_idx].strip()
+
+        # Strategy 2: baseline-length offset.
         new_text = pane[baseline_len:]
         idx_in_new = new_text.find(sentinel)
-        if idx_in_new == -1:
-            # Fall back to last 4000 chars of pane if we can't locate it.
-            return pane[-4000:]
-        idx = baseline_len + idx_in_new
-        return pane[max(baseline_len, idx - 6000):idx]
+        if idx_in_new != -1:
+            idx = baseline_len + idx_in_new
+            return pane[max(baseline_len, idx - 6000):idx]
+
+        # Strategy 3: fall through.
+        return pane[-4000:]
 
     def run(self, task: TaskSpec, run_dir: Path) -> RunResult:
         from .base import short_uid  # local import to avoid cycle warning
@@ -454,6 +496,11 @@ class DETMRunner(RunnerBase):
         self._reset_browser()
         tasks_before = _list_task_ids()
 
+        # Optional screen recording (BENCH_RECORD_VIDEO=1).
+        from .recorder import DisplayRecorder
+        recorder = DisplayRecorder(out_path=run_dir / "recording.mp4")
+        recorder.start()
+
         prompt = self._build_prompt(task, sentinel)
         started_at = self.now_iso()
         t0 = time.time()
@@ -486,9 +533,10 @@ class DETMRunner(RunnerBase):
         )
         parsed = extract_json_block(final_text)
 
-        # Take final screenshot.
+        # Take final screenshot, then stop recording.
         screenshot_path = run_dir / "screenshots" / "final.png"
         _screenshot(screenshot_path)
+        recorder.stop()
 
         # Save raw tmux pane for debugging.
         (run_dir / "tmux_pane.txt").write_text(pane)

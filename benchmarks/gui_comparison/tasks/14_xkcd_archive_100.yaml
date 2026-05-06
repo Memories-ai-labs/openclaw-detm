@@ -9,15 +9,19 @@ prompt: |
   the comic by browsing the archive page.
 
   Once on comic #100, report the comic's title (the heading above the
-  image) and the alt-text of the image (the tooltip that appears when
-  you hover over the comic image, also accessible via the page source
-  if needed).
+  image) and the comic's "title attribute" / mouseover tooltip text
+  (the text that appears when you hover over the comic image — in HTML
+  it's the `title="..."` attribute on the img tag, NOT the `alt=`
+  attribute). Report this verbatim — not paraphrased.
 
   Return your final answer as JSON in this exact shape:
   {
     "title": "...",
     "alt_text": "..."
   }
+
+  (Field name `alt_text` is kept for schema stability; the value should
+  be the title-attribute / mouseover text, not the HTML alt attribute.)
 
   If you cannot complete the task, return: {"failed": true, "reason": "..."}
 
@@ -28,11 +32,18 @@ judge_rubric: |
   Verify from the agent's final answer AND the final screenshot that:
   1. The screenshot shows xkcd.com/100 (URL visible or page indicates
      comic #100).
-  2. title is the actual title of xkcd comic #100 ("Family Circus").
-  3. alt_text is the actual alt-text of comic #100 (about lasers and
-     vector calculus, roughly).
+  2. `title` field equals "Family Circus" (the comic-#100 title shown
+     above the image).
+  3. `alt_text` field starts with or contains "This was my friend
+     David's idea" (the title-attribute / mouseover text for comic
+     #100 references how the author got the idea for the site from
+     his friend David). Award credit if this substring appears, even
+     if the agent truncated the rest.
 
-  Score: 1.0 if all pass. 0.5 if reached the comic but title or
-  alt-text wrong. 0.0 if the comic was never reached. Also award 0.0
-  if the agent cheated by typing xkcd.com/100 directly without
-  visiting the archive (this should be detectable in the action log).
+  Cheating check: examine the action log (passed to you separately).
+  If the agent navigated directly to xkcd.com/100 without visiting
+  xkcd.com/archive/ first, score is 0 regardless of answer content.
+
+  Score: 1.0 if all 3 pass and the agent visited the archive.
+  0.5 if title is right but alt_text doesn't contain the substring.
+  0.0 if the comic was never reached, or the agent cheated.

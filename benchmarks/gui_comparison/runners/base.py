@@ -176,10 +176,11 @@ def extract_json_block(text: str) -> Optional[dict]:
     """Pull a JSON object out of an agent's final response.
 
     Order of preference:
-      1. The LAST fenced ```json block (agents tend to put their final
-         answer last after some narration).
-      2. Any balanced {...} top-level object that parses, walked left
-         to right — the first one that parses wins.
+      1. The LAST fenced ```json block (agents narrate first, answer last).
+      2. The LAST balanced {...} top-level object that parses (mirrors
+         the fence priority — guards against parsing the example
+         template that the prompt itself contains, e.g.
+         {"failed": true, "reason": "..."}).
 
     Returns None if nothing parses.
     """
@@ -191,7 +192,10 @@ def extract_json_block(text: str) -> Optional[dict]:
         # Last fence first — that's the most likely "final answer".
         candidates.append(fences[-1])
         candidates.extend(reversed(fences[:-1]))
-    candidates.extend(_balanced_objects(text))
+    # Walk balanced objects in REVERSE — agent's actual answer is later
+    # in the text than the prompt's example template.
+    bare = _balanced_objects(text)
+    candidates.extend(reversed(bare))
     for cand in candidates:
         try:
             return json.loads(cand)

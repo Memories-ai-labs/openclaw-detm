@@ -1,9 +1,10 @@
-"""Model-as-judge: claude-haiku-4-5 verdict on one trial.
+"""Model-as-judge: claude-opus-4-7 verdict on one trial.
 
 Uses OpenRouter (openrouter.ai) for both authentication and routing —
 the env we run in has OPENROUTER_API_KEY but no native ANTHROPIC_API_KEY.
-The judge model defaults to `anthropic/claude-haiku-4-5` over OpenRouter,
-but can be overridden via BENCH_JUDGE_MODEL.
+The judge model defaults to `anthropic/claude-opus-4-7` over OpenRouter,
+but can be overridden via BENCH_JUDGE_MODEL (e.g. claude-haiku-4-5 if
+you want a cheaper-but-less-accurate run).
 
 Inputs: TaskSpec, the agent's final text answer, and the path to the
 final-state screenshot (optional but strongly recommended — the rubric
@@ -68,6 +69,9 @@ _USER_TEMPLATE = """## Task
 {final_answer}
 ```
 
+## Action log
+{action_log}
+
 ## Screenshot of agent's final state
 (see attached image, if present)
 
@@ -75,7 +79,36 @@ Return JSON: {{"success": bool, "partial_credit": float, "reason": str}}
 """
 
 
-def _build_message(task, final_answer: str, screenshot_path: Optional[Path]) -> dict:
+def _format_action_log(actions: Optional[list]) -> str:
+    """Compact, judge-friendly view of the agent's action sequence.
+
+    Truncates verbose tool args / detail fields. If the rubric mentions
+    "action log" or "cheating", this is what the judge consults.
+    """
+    if not actions:
+        return "(no action log captured)"
+    lines = [f"({len(actions)} actions total)"]
+    # Show all actions if <= 30, else first 15 + last 15.
+    show = actions if len(actions) <= 30 else actions[:15] + [{"_skip_": "..."}] + actions[-15:]
+    for i, a in enumerate(show):
+        if "_skip_" in a:
+            lines.append(f"  ... ({len(actions) - 30} actions omitted) ...")
+            continue
+        # Compact each action down to ~150 chars
+        if "tool" in a:
+            args_str = json.dumps(a.get("args", {}))[:100]
+            lines.append(f"  {a.get('n', i)}. {a['tool']}({args_str}) ok={a.get('ok')}")
+        elif "summary" in a:
+            lines.append(f"  - {a.get('type', '?')}: {a.get('summary', '')[:120]}")
+        elif "action" in a:
+            lines.append(f"  - {str(a['action'])[:120]}")
+        else:
+            lines.append(f"  - {json.dumps(a)[:120]}")
+    return "\n".join(lines)
+
+
+def _build_message(task, final_answer: str, screenshot_path: Optional[Path],
+                   actions: Optional[list] = None) -> dict:
     text_part = {
         "type": "text",
         "text": _USER_TEMPLATE.format(
@@ -83,6 +116,7 @@ def _build_message(task, final_answer: str, screenshot_path: Optional[Path]) -> 
             task_prompt=task.prompt,
             judge_rubric=task.judge_rubric,
             final_answer=final_answer or "(empty)",
+            action_log=_format_action_log(actions),
         ),
     }
     content: list = [text_part]
@@ -112,12 +146,18 @@ def judge(
     task,
     final_answer: str,
     final_screenshot_path: Optional[Path] = None,
+    actions: Optional[list] = None,
     api_key: Optional[str] = None,
     model: Optional[str] = None,
 ) -> dict:
     """Returns dict with keys: success (bool), partial_credit (float),
     reason (str). On API error or unparseable response, returns success=False
-    with the error in reason."""
+    with the error in reason.
+
+    `actions`: optional list of action dicts (parsed from actions.jsonl).
+    Some rubrics specifically reference the action log (e.g. task 14's
+    "did the agent visit the archive vs typing the URL directly").
+    """
     api_key = api_key or os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         return {
@@ -129,7 +169,7 @@ def judge(
 
     messages = [
         {"role": "system", "content": _SYSTEM},
-        _build_message(task, final_answer, final_screenshot_path),
+        _build_message(task, final_answer, final_screenshot_path, actions),
     ]
     try:
         with httpx.Client(timeout=60.0) as c:

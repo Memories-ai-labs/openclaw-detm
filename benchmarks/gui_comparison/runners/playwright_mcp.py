@@ -94,14 +94,93 @@ _MESSAGE_HISTORY_HARD_CAP = 80
 
 class PlaywrightMCPRunner(RunnerBase):
     family = "playwright_mcp"
+    # One-shot guard so we sync cookies once per orchestrator process,
+    # not once per task.
+    _cookies_synced = False
 
     def __init__(self, model: str):
         super().__init__(model=model)
         self.api_key = os.environ.get("OPENROUTER_API_KEY")
         if not self.api_key:
             raise RuntimeError("OPENROUTER_API_KEY env var is required")
+        self._maybe_sync_cookies()
+
+    def _maybe_sync_cookies(self) -> None:
+        """Copy cookies from the user's main Chrome profile (the one DETM
+        uses on :99) into the bench Chromium profile so both families
+        start from the same logged-in state. One-shot per process."""
+        if PlaywrightMCPRunner._cookies_synced:
+            return
+        if os.environ.get("BENCH_SKIP_COOKIE_SYNC") == "1":
+            print("  (skipping cookie sync — BENCH_SKIP_COOKIE_SYNC=1)")
+            PlaywrightMCPRunner._cookies_synced = True
+            return
+        try:
+            from . import cookie_sync
+            print("  syncing Chrome cookies → bench Chromium profile...")
+            cookie_sync.sync(verbose=True)
+        except RuntimeError as e:
+            # Bench Chromium running, or source profile missing — warn but
+            # don't fail; LinkedIn tasks may still hit login wall.
+            print(f"  ⚠ cookie sync failed: {e}")
+        except Exception as e:
+            print(f"  ⚠ cookie sync raised: {e}")
+        PlaywrightMCPRunner._cookies_synced = True
+
+    def _check_linkedin_login(self) -> str | None:
+        """Return None if the bench Chromium profile has a LinkedIn
+        session cookie (li_at), else a human-readable error message.
+        Used as a preflight for tier-1 tasks that declare
+        needs_logged_in_linkedin: true."""
+        cookies_db = PROFILE_DIR / "Default" / "Cookies"
+        if not cookies_db.exists():
+            return (
+                f"Bench Chromium profile {PROFILE_DIR} has no Cookies file — "
+                f"never been logged in. Run cookie sync (auto-runs at "
+                f"orchestrator start) or log in manually."
+            )
+        import sqlite3 as _sql
+        try:
+            tmp = Path(f"/tmp/_bench_cookies_check_{os.getpid()}.db")
+            shutil.copy2(cookies_db, tmp)
+            con = _sql.connect(str(tmp))
+            n = con.execute(
+                "SELECT COUNT(*) FROM cookies "
+                "WHERE host_key LIKE '%linkedin%' AND name='li_at'"
+            ).fetchone()[0]
+            con.close()
+            tmp.unlink()
+            if n == 0:
+                return (
+                    f"No LinkedIn 'li_at' session cookie in bench profile. "
+                    f"Cookie sync may have run but LinkedIn-side cookie wasn't "
+                    f"picked up. Log in to LinkedIn manually in the source "
+                    f"Chrome (the one on :99) and re-run."
+                )
+        except Exception as e:
+            return f"Couldn't read bench Cookies DB: {e}"
+        return None
 
     def run(self, task: TaskSpec, run_dir: Path) -> RunResult:
+        # Tier-1 tasks declare needs_logged_in_linkedin: true. Preflight
+        # the cookie state so we fail fast with a clear error instead of
+        # having the agent hit a login wall and waste tokens.
+        if task.family_constraints.get("needs_logged_in_linkedin"):
+            err = self._check_linkedin_login()
+            if err:
+                r = RunResult(
+                    task_id=task.id, family=self.family, model=self.model,
+                    run_id=run_dir.parent.parent.name,
+                    started_at=self.now_iso(), ended_at=self.now_iso(),
+                    duration_s=0.0, n_tool_calls=0, n_assistant_messages=0,
+                    n_screenshots=0, thinking_chars=0,
+                    prompt_tokens=0, completion_tokens=0,
+                    final_answer="", final_answer_parsed=None,
+                    termination_reason="error",
+                    error_message=f"preflight: {err}",
+                )
+                save_run_artifacts(run_dir, r)
+                return r
         return asyncio.run(self._run_async(task, run_dir))
 
     async def _run_async(self, task: TaskSpec, run_dir: Path) -> RunResult:
@@ -116,6 +195,14 @@ class PlaywrightMCPRunner(RunnerBase):
         thinking_chars = 0
         prompt_tokens_total = 0
         completion_tokens_total = 0
+
+        # Optional screen recording (BENCH_RECORD_VIDEO=1). Only useful
+        # when Playwright is headed (BENCH_PLAYWRIGHT_HEADLESS=0) — when
+        # headless, Chromium renders off-screen and the recording is blank.
+        from .recorder import DisplayRecorder
+        recorder = DisplayRecorder(out_path=run_dir / "recording.mp4") if not HEADLESS else None
+        if recorder:
+            recorder.start()
 
         started_at = self.now_iso()
         t0 = time.time()
@@ -258,6 +345,16 @@ class PlaywrightMCPRunner(RunnerBase):
                         final_text = f"OpenRouter returned no choices: {data}"
                         break
                     msg = choices[0].get("message", {}) or {}
+                    # If the provider returned tool_calls without ids,
+                    # synthesize them HERE — before the assistant turn is
+                    # logged or the tool results are dispatched. This keeps
+                    # the assistant.tool_calls[i].id and the matching
+                    # tool.tool_call_id in lockstep (otherwise they drift
+                    # and the next API call 400s).
+                    if msg.get("tool_calls"):
+                        for i, tc in enumerate(msg["tool_calls"]):
+                            if not tc.get("id"):
+                                tc["id"] = f"call_{n_assistant_messages + 1}_{i}"
                     n_assistant_messages += 1
                     # Track reasoning if present (some models on OpenRouter
                     # surface reasoning_content / thinking).
@@ -322,13 +419,12 @@ class PlaywrightMCPRunner(RunnerBase):
                             "latency_s": round(call_dt, 3),
                         })
 
-                        # tool_call_id MUST be a non-empty string — some
-                        # OpenRouter providers reject null. Synthesize one
-                        # from our turn counter when upstream omits it.
-                        tc_id = tc.get("id") or f"call_{n_tool_calls}"
+                        # IDs were synthesized above (if missing) on the
+                        # assistant message side, so they're always present
+                        # here AND match what we said in the assistant turn.
                         messages.append({
                             "role": "tool",
-                            "tool_call_id": tc_id,
+                            "tool_call_id": tc["id"],
                             "name": name,
                             "content": result_text,
                         })
@@ -373,6 +469,9 @@ class PlaywrightMCPRunner(RunnerBase):
                         )
                 except Exception:
                     pass
+
+        if recorder:
+            recorder.stop()
 
         ended_at = self.now_iso()
         duration = time.time() - t0

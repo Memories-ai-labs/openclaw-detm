@@ -71,7 +71,17 @@ def _aggregate_by_model(rows: list[dict]) -> list[dict]:
     out = []
     for (fam, mdl), trials in sorted(groups.items()):
         n = len(trials)
+        # judge_success = the judge's binary verdict (may be True even
+        # when partial_credit < 1.0 — judge can decide "agent succeeded
+        # at the task even though they only got 4 of 5 entries right").
         n_ok = sum(1 for t in trials if t.get("judge_success"))
+        # n_perfect = partial_credit >= 0.99. Stricter than judge_success;
+        # use this when you care about end-to-end perfection, not just
+        # "did the judge call it a success".
+        n_perfect = sum(
+            1 for t in trials
+            if (t.get("judge_partial_credit") or 0.0) >= 0.99
+        )
         n_no_json = sum(
             1 for t in trials
             if t.get("termination_reason") == "completed_no_json"
@@ -91,6 +101,7 @@ def _aggregate_by_model(rows: list[dict]) -> list[dict]:
         out.append({
             "family": fam, "model": mdl, "n_tasks": n,
             "n_success": n_ok, "success_rate": round(n_ok / max(n, 1), 3),
+            "n_perfect": n_perfect,    # stricter: partial_credit >= 0.99
             "avg_score": round(mean(scores) if scores else 0.0, 3),
             "avg_duration_s": round(mean(durations) if durations else 0.0, 1),
             "avg_actions": round(mean(actions) if actions else 0.0, 1),

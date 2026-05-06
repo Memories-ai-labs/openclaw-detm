@@ -80,10 +80,25 @@ def _make_runner(family: str, model: str):
 
 def _judge_run(run_dir: Path, task: TaskSpec, final_answer: str) -> dict:
     screenshot = run_dir / "screenshots" / "final.png"
+    # Load the action log so the judge can apply rubrics that reference
+    # the trajectory (e.g., task 14's "did the agent visit the archive
+    # vs typing the URL directly").
+    actions = []
+    actions_path = run_dir / "actions.jsonl"
+    if actions_path.exists():
+        for line in actions_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                actions.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
     return run_judge(
         task,
         final_answer=final_answer,
         final_screenshot_path=screenshot if screenshot.exists() else None,
+        actions=actions or None,
     )
 
 
@@ -218,6 +233,17 @@ def _rejudge(run_id: str) -> int:
                 task_dir / "final_answer.txt"
             ).exists() else metrics.get("final_answer", "")
             print(f"  judging {family_model_dir.name}/{task_id} ...")
+            actions = []
+            actions_path = task_dir / "actions.jsonl"
+            if actions_path.exists():
+                for line in actions_path.read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        actions.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
             verdict = run_judge(
                 task,
                 final_answer=final_answer,
@@ -226,6 +252,7 @@ def _rejudge(run_id: str) -> int:
                     if (task_dir / "screenshots" / "final.png").exists()
                     else None
                 ),
+                actions=actions or None,
             )
             metrics["judge_success"] = verdict["success"]
             metrics["judge_partial_credit"] = verdict["partial_credit"]

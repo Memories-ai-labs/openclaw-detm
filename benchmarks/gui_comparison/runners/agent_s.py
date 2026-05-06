@@ -203,6 +203,10 @@ class AgentSRunner(RunnerBase):
         )
         instruction = task.prompt + addendum
 
+        from .recorder import DisplayRecorder
+        recorder = DisplayRecorder(out_path=run_dir / "recording.mp4")
+        recorder.start()
+
         started_at = self.now_iso()
         t0 = time.time()
         deadline = t0 + task.max_duration_s
@@ -286,17 +290,23 @@ class AgentSRunner(RunnerBase):
             if signaled or termination in ("timeout", "error"):
                 break
 
+        # If we exhausted the for-loop without signaling DONE/FAIL or
+        # tripping a timeout/error, we hit the action cap.
+        if not signaled and termination == "completed":
+            termination = "max_actions"
+
         ended_at = self.now_iso()
         duration = time.time() - t0
         if signaled == "FAIL":
             termination = "failed"
 
-        # Final screenshot.
+        # Final screenshot, then stop recording.
         screenshot_path = run_dir / "screenshots" / "final.png"
         try:
             screenshot_path.write_bytes(_screenshot_display())
         except Exception:
             pass
+        recorder.stop()
 
         # Read the answer file if the agent wrote one; else fall back to
         # extracting JSON from the last thought.
