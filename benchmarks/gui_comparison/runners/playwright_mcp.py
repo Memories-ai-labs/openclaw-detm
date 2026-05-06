@@ -70,20 +70,39 @@ def _mcp_tool_to_openai(mcp_tool) -> dict:
     }
 
 
-def _summarize_tool_result(result) -> str:
-    """Compact text summary of an MCP tool result for the LLM message log."""
-    parts = []
+def _split_tool_result(result) -> tuple[str, list[tuple[str, str]]]:
+    """Returns (text_summary, [(mime_type, base64_data), ...]).
+
+    text_summary is the compact textual representation that goes into the
+    OpenAI tool result message (string-only). Image content is extracted
+    separately so the runner can inject it as image_url in a follow-up
+    user message — the LLM can then actually SEE the screenshot it asked
+    for, instead of getting a "[image]" placeholder.
+    """
+    text_parts: list[str] = []
+    images: list[tuple[str, str]] = []
     for c in (result.content or []):
-        if getattr(c, "type", None) == "text":
-            parts.append(c.text)
-        elif getattr(c, "type", None) == "image":
-            parts.append("[image]")
+        ctype = getattr(c, "type", None)
+        if ctype == "text":
+            text_parts.append(c.text)
+        elif ctype == "image":
+            data = getattr(c, "data", None)
+            mime = getattr(c, "mimeType", "image/png") or "image/png"
+            if isinstance(data, str):
+                images.append((mime, data))
+            text_parts.append(f"[image {mime} returned — see follow-up user message]")
         else:
-            parts.append(str(c))
-    txt = "\n".join(parts)
+            text_parts.append(str(c))
+    txt = "\n".join(text_parts)
     if len(txt) > 4000:
         txt = txt[:4000] + f"\n…[truncated, full length {len(txt)} chars]"
-    return txt or "(empty result)"
+    return (txt or "(empty result)"), images
+
+
+# Backward-compat: some callers may still import _summarize_tool_result.
+def _summarize_tool_result(result) -> str:
+    txt, _ = _split_tool_result(result)
+    return txt
 
 
 # ── Runner ───────────────────────────────────────────────────────────────
@@ -221,6 +240,16 @@ class PlaywrightMCPRunner(RunnerBase):
         playwright_args = [
             "-y", "@playwright/mcp@latest",
             "--browser", "chromium",
+            # `--caps vision` adds the *_xy mouse tools and tells the
+            # server to allow vision-mode navigation. We keep DOM tools
+            # too (browser_snapshot, browser_click(ref), etc.) so the
+            # LLM can pick whichever fits — DOM when reliable, vision
+            # when the DOM is opaque (canvas, iframes, dynamic React).
+            "--caps", "vision",
+            # Allow image responses so screenshot tools actually return
+            # bytes (we inject them as image_url in a follow-up user
+            # message; see _split_tool_result + tool dispatch loop).
+            "--image-responses", "allow",
             "--viewport-size", "1920,1080",
         ]
         if HEADLESS:
@@ -285,12 +314,28 @@ class PlaywrightMCPRunner(RunnerBase):
                     "role": "system",
                     "content": (
                         "You are a GUI agent driving a Chromium browser via "
-                        "Playwright tools. Complete the task by navigating, "
-                        "clicking, typing, and reading page content. When you "
-                        "have the answer, return it as plain text in the "
-                        "exact JSON shape the task asks for, using a ```json "
-                        "fenced block. Do not call further tools after you "
-                        "have the answer."
+                        "Playwright tools. You have access to BOTH a DOM-based "
+                        "tool surface (browser_snapshot returns the "
+                        "accessibility tree, browser_click(target=ref) clicks "
+                        "by ref, browser_evaluate runs JS) AND a vision-based "
+                        "tool surface (browser_take_screenshot returns the "
+                        "image, browser_mouse_click_xy(x, y) clicks at pixel "
+                        "coords, browser_mouse_drag_xy/move_xy/wheel for other "
+                        "mouse actions, browser_type for keyboard input).\n"
+                        "\n"
+                        "Use whichever fits the situation:\n"
+                        "  - DOM is faster and more reliable when accessibility "
+                        "refs work (most static HTML, well-labeled UIs).\n"
+                        "  - Vision is necessary for canvas-rendered UIs, "
+                        "iframes, or pages whose DOM is opaque or where the "
+                        "DOM snapshot doesn't match what's visually shown.\n"
+                        "  - Mix: take a screenshot to confirm visual state "
+                        "even when interacting via DOM.\n"
+                        "\n"
+                        "When you have the final answer, return it as plain "
+                        "text in the exact JSON shape the task asks for, "
+                        "inside a ```json fenced block. Do not call any further "
+                        "tools after you've produced the answer."
                     ),
                 },
                 {"role": "user", "content": task.prompt},
@@ -415,9 +460,10 @@ class PlaywrightMCPRunner(RunnerBase):
                         except json.JSONDecodeError:
                             args = {}
                         call_t0 = time.time()
+                        result_images: list[tuple[str, str]] = []
                         try:
                             result = await session.call_tool(name, args)
-                            result_text = _summarize_tool_result(result)
+                            result_text, result_images = _split_tool_result(result)
                             ok = not getattr(result, "isError", False)
                         except Exception as e:
                             result_text = f"tool error: {e}"
@@ -430,6 +476,7 @@ class PlaywrightMCPRunner(RunnerBase):
                             "args": args,
                             "ok": ok,
                             "result_chars": len(result_text),
+                            "n_images_returned": len(result_images),
                             "latency_s": round(call_dt, 3),
                         })
 
@@ -446,7 +493,36 @@ class PlaywrightMCPRunner(RunnerBase):
                             "role": "tool",
                             "name": name,
                             "content_chars": len(result_text),
+                            "n_images_returned": len(result_images),
                         })
+
+                        # If the tool returned image content (typically
+                        # browser_take_screenshot), inject it as a follow-up
+                        # USER message so the LLM can actually see it.
+                        # OpenAI tool-result messages don't carry image
+                        # content; this is the standard workaround.
+                        if result_images:
+                            user_content: list = [{
+                                "type": "text",
+                                "text": (
+                                    f"(Image{'s' if len(result_images) > 1 else ''} "
+                                    f"returned by `{name}` — view and act on "
+                                    f"what's shown.)"
+                                ),
+                            }]
+                            for mime, b64 in result_images:
+                                user_content.append({
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                                })
+                            messages.append({"role": "user", "content": user_content})
+                            messages_log.append({
+                                "role": "user",
+                                "content_chars": sum(
+                                    len(b64) for _, b64 in result_images
+                                ),
+                                "n_images": len(result_images),
+                            })
 
                         # Cap per-task tool calls.
                         if n_tool_calls >= task.max_actions:
