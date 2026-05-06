@@ -5,11 +5,11 @@ tasks.
 
 ## Families
 
-| Family | Description | Variants |
+| Family | Grounding paradigm | Variants |
 |---|---|---|
-| **A. Playwright MCP** | LLM via OpenRouter + Playwright MCP server (text-DOM-grounded) | gpt-5.4, gpt-5.4-mini, sonnet-4.6, opus-4.6, gemini-3-flash |
-| **B. OpenClaw + DETM** | Local OpenClaw (gpt-5.4 main) driving DETM's vision-grounded gui_agent | gui_agent backend: gpt-5.4, gpt-5.4-mini, sonnet-4.6, opus-4.6, gemini-3-flash |
-| **C. Agent S3** | Simular Agent S3 (planner + UI-TARS grounding), running directly on display :99 | default config |
+| **A. Playwright MCP** | DOM-first hybrid: agent has both DOM tools (`browser_snapshot` accessibility tree, `browser_click(ref)`, `browser_evaluate`) AND vision tools (`browser_take_screenshot`, `browser_mouse_click_xy`). LLM picks per-action. Mirrors how Claude in Chrome / ChatGPT Operator operate. | gpt-5.4, gpt-5.4-mini, sonnet-4.6, opus-4.6, gemini-3-flash |
+| **B. OpenClaw + DETM (bash backend)** | LLM-as-grounder: gpt-5.4 (or whatever model the daemon is configured with) sees the screenshot directly and emits `xdotool` commands for clicks/typing. NO separate grounding model — the planner LLM does its own pixel localization. | gui_agent backend: gpt-5.4, gpt-5.4-mini, sonnet-4.6, opus-4.6, gemini-3-flash |
+| **C. Agent S3** | Planner + specialist grounder: planner LLM emits natural-language click targets ("the People tab"), UI-TARS-1.5-7b returns pixel coords from the screenshot, pyautogui executes. Division of labor between planner and grounder. | default config (planner = gpt-5.4, grounder = bytedance/ui-tars-1.5-7b) |
 
 ## Tasks
 
