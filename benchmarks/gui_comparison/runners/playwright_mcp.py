@@ -212,20 +212,26 @@ class PlaywrightMCPRunner(RunnerBase):
         deadline = t0 + task.max_duration_s
 
         # 1) Spawn Playwright MCP --------------------------------------
-        PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+        # If we have a storage state JSON (cookies decrypted from main
+        # Chrome), use --isolated mode so Playwright loads the cookies
+        # from the storage state into a fresh in-memory profile.
+        # `--user-data-dir + --storage-state` together is a footgun:
+        # persistent-profile cookies (empty) override the storage-state
+        # ones, leaving the agent logged out.
         playwright_args = [
             "-y", "@playwright/mcp@latest",
             "--browser", "chromium",
-            "--user-data-dir", str(PROFILE_DIR),
             "--viewport-size", "1920,1080",
         ]
         if HEADLESS:
             playwright_args.append("--headless")
-        # Use the storage state JSON exported from the user's main Chrome
-        # so we land in linkedin etc. already logged in. Skip if it
-        # doesn't exist (cookie sync may have been skipped).
         if STORAGE_STATE.exists():
-            playwright_args += ["--storage-state", str(STORAGE_STATE)]
+            playwright_args += ["--isolated", "--storage-state", str(STORAGE_STATE)]
+        else:
+            # No exported state — fall back to the persistent profile so
+            # any manually-logged-in cookies still get used.
+            PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+            playwright_args += ["--user-data-dir", str(PROFILE_DIR)]
         server = StdioServerParameters(
             command="npx",
             args=playwright_args,
