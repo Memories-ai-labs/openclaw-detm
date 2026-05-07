@@ -401,6 +401,12 @@ class PlaywrightMCPRunner(RunnerBase):
         )
 
         async with AsyncExitStack() as stack:
+            # Register recorder.stop as an exit callback FIRST so it
+            # fires on any exception inside the stack (otherwise ffmpeg
+            # leaks). recorder.stop() is idempotent — safe even though
+            # we also call it explicitly later on the success path.
+            if recorder:
+                stack.callback(recorder.stop)
             try:
                 read, write = await stack.enter_async_context(stdio_client(server))
                 session = await stack.enter_async_context(ClientSession(read, write))
@@ -680,19 +686,22 @@ class PlaywrightMCPRunner(RunnerBase):
                                 break
             except Exception:
                 pass
-            # Fallback: scrot the X display. (May capture wrong window if
-            # other apps are present, but better than nothing for the judge.)
+            # Fallback: scrot the X display. Use pw_display so we capture
+            # the same display Chromium is rendering to (avoids capturing
+            # the unrelated XFCE desktop on :99 when we recorded on :101).
             if not screenshot_path.exists():
                 try:
                     if shutil.which("scrot"):
                         subprocess.run(
                             ["scrot", "-z", str(screenshot_path)],
-                            env={**os.environ, "DISPLAY": DISPLAY},
+                            env={**os.environ, "DISPLAY": pw_display},
                             stderr=subprocess.DEVNULL, timeout=10,
                         )
                 except Exception:
                     pass
 
+        # Recorder cleanup happens in the outer finally so it's also
+        # called on exception paths (would otherwise leak ffmpeg).
         if recorder:
             recorder.stop()
 

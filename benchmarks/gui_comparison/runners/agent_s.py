@@ -19,6 +19,7 @@ with our own metrics: actions_taken, latency, thought length.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import os
 import shutil
@@ -227,8 +228,23 @@ class AgentSRunner(RunnerBase):
                 break
 
             obs = {"screenshot": png}
+            # agent.predict() has no internal timeout — a hung
+            # OpenRouter request would otherwise blow past
+            # task.max_duration_s. Cap the per-call time at
+            # min(remaining_budget, 120s) using a thread + future.
+            remaining = max(deadline - time.time(), 1.0)
+            per_call_budget = min(remaining, 120.0)
             try:
-                response, actions = agent.predict(instruction, obs)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                    fut = ex.submit(agent.predict, instruction, obs)
+                    response, actions = fut.result(timeout=per_call_budget)
+            except concurrent.futures.TimeoutError:
+                termination = "timeout"
+                last_thought = (
+                    f"agent.predict exceeded per-call budget "
+                    f"of {per_call_budget:.0f}s"
+                )
+                break
             except Exception as e:
                 termination = "error"
                 last_thought = f"agent.predict failed: {e}"

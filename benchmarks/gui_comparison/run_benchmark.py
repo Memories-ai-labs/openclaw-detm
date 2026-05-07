@@ -257,8 +257,29 @@ def main() -> int:
                 try:
                     result = runner.run(task, run_dir)
                 except Exception as e:
-                    print(f"  ✗ runner.run() raised: {e}")
+                    err_msg = f"{type(e).__name__}: {e}"
+                    print(f"  ✗ runner.run() raised: {err_msg}")
                     traceback.print_exc()
+                    # Synthesize a metrics.json so this trial appears in
+                    # the aggregator + summary as an error, not a hole.
+                    crash_result_dict = {
+                        "task_id": task.id, "family": family, "model": model,
+                        "run_id": args.run_id,
+                        "started_at": "", "ended_at": "",
+                        "duration_s": round(time.time() - t0, 1),
+                        "n_tool_calls": 0, "n_assistant_messages": 0,
+                        "n_screenshots": 0, "thinking_chars": 0,
+                        "prompt_tokens": 0, "completion_tokens": 0,
+                        "final_answer": "", "final_answer_parsed": None,
+                        "termination_reason": "error",
+                        "judge_success": None,
+                        "judge_partial_credit": None,
+                        "judge_reason": None,
+                        "error_message": f"runner.run() raised: {err_msg}",
+                    }
+                    (run_dir / "metrics.json").write_text(
+                        json.dumps(crash_result_dict, indent=2)
+                    )
                     statuses[(family, model, task.id)] = {
                         "status": "error",
                         "log_score": None, "video_score": None,
