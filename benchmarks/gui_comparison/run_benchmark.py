@@ -259,6 +259,13 @@ def main() -> int:
                 except Exception as e:
                     print(f"  ✗ runner.run() raised: {e}")
                     traceback.print_exc()
+                    statuses[(family, model, task.id)] = {
+                        "status": "error",
+                        "log_score": None, "video_score": None,
+                        "duration_s": round(time.time() - t0, 1),
+                        "actions": None,
+                    }
+                    _write_progress_table(args.run_id, plan, statuses, started_at_run)
                     continue
                 dt = time.time() - t0
                 print(f"  duration={dt:.1f}s  termination={result.termination_reason}  "

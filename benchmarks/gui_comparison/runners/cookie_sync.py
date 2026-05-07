@@ -212,9 +212,41 @@ def export_storage_state(
         cookies.append(c)
 
     state = {"cookies": cookies, "origins": []}
+
+    # Don't clobber a previously-good storage state with a degraded
+    # version: if the new export has NO li_at but a prior export DID,
+    # something's wrong (keyring access broke?) and we'd silently lose
+    # logged-in state. Fail-safe: keep the old file.
+    new_li_at = sum(
+        1 for c in cookies
+        if c.get("name") == "li_at" and "linkedin" in (c.get("domain") or "")
+    )
+    if out_path.exists() and new_li_at == 0:
+        try:
+            old_state = json.loads(out_path.read_text())
+            old_li_at = sum(
+                1 for c in (old_state.get("cookies") or [])
+                if c.get("name") == "li_at"
+                and "linkedin" in (c.get("domain") or "")
+            )
+            if old_li_at > 0:
+                if verbose:
+                    print(
+                        f"  ⚠ New export has no li_at but existing "
+                        f"{out_path} does — keeping the existing file. "
+                        f"(Likely keyring access transient failure.)"
+                    )
+                return n_decrypted
+        except Exception:
+            pass
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(state, indent=2))
-    out_path.chmod(0o600)
+    # Atomic write: tmp + rename so a reader never sees a half-written
+    # state file.
+    tmp = out_path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    tmp.chmod(0o600)
+    tmp.replace(out_path)
 
     if verbose:
         n_li = sum(1 for c in cookies if "linkedin" in c["domain"])

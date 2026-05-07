@@ -65,37 +65,91 @@ PW_RECORD_DISPLAY = os.environ.get("BENCH_PLAYWRIGHT_RECORD_DISPLAY", ":101")
 _pw_xvfb_proc: Optional[subprocess.Popen] = None
 
 
+def _is_display_ready(display: str) -> bool:
+    """True if `xdpyinfo -display X` reports the display is up."""
+    if not shutil.which("xdpyinfo"):
+        return False
+    try:
+        r = subprocess.run(
+            ["xdpyinfo", "-display", display],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def _ensure_pw_xvfb() -> str:
-    """Spawn (or reuse) the dedicated Xvfb on PW_RECORD_DISPLAY. Returns
-    the display string. Idempotent; called once per orchestrator process.
-    Cleaned up via atexit."""
+    """Spawn (or reuse) the dedicated Xvfb on PW_RECORD_DISPLAY.
+
+    Robustly handles the "stale Xvfb from a previous orchestrator run"
+    case: if PW_RECORD_DISPLAY is already serviceable but we don't own
+    the process (e.g., previous run died via SIGTERM), we kill the
+    stale Xvfb and respawn — otherwise our Chromium would attach to
+    the orphaned display and our ffmpeg recorder would capture stale
+    pixels.
+
+    Cleaned up via atexit AND signal.SIGINT/SIGTERM handlers (atexit
+    alone misses SIGTERM).
+    """
     global _pw_xvfb_proc
-    if _pw_xvfb_proc is not None and _pw_xvfb_proc.poll() is None:
+    # Already healthy AND we own it?
+    if (_pw_xvfb_proc is not None
+            and _pw_xvfb_proc.poll() is None
+            and _is_display_ready(PW_RECORD_DISPLAY)):
         return PW_RECORD_DISPLAY
+
     if not shutil.which("Xvfb"):
         raise RuntimeError("Xvfb not installed — needed for Playwright recording")
+
+    # If display is up but we don't own it, clear it.
+    if _is_display_ready(PW_RECORD_DISPLAY):
+        print(f"  ⚠ Stale Xvfb on {PW_RECORD_DISPLAY} — killing before respawn")
+        try:
+            subprocess.run(
+                ["pkill", "-f", f"Xvfb {PW_RECORD_DISPLAY}"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except Exception:
+            pass
+        # Also remove the X11 lock file Xvfb leaves behind on hard exit.
+        for lock in (f"/tmp/.X{PW_RECORD_DISPLAY.lstrip(':')}-lock",):
+            try:
+                os.unlink(lock)
+            except FileNotFoundError:
+                pass
+            except Exception:
+                pass
+        time.sleep(0.5)
+
     _pw_xvfb_proc = subprocess.Popen(
         ["Xvfb", PW_RECORD_DISPLAY, "-screen", "0", "1920x1080x24"],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
     # Wait briefly for Xvfb to become ready.
-    import time as _time
     for _ in range(30):
-        try:
-            r = subprocess.run(
-                ["xdpyinfo", "-display", PW_RECORD_DISPLAY],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                timeout=2,
-            )
-            if r.returncode == 0:
-                break
-        except Exception:
-            pass
-        _time.sleep(0.2)
-    # Best-effort cleanup at process exit.
+        if _is_display_ready(PW_RECORD_DISPLAY):
+            break
+        time.sleep(0.2)
+    else:
+        raise RuntimeError(
+            f"Xvfb spawned on {PW_RECORD_DISPLAY} but display never became "
+            f"serviceable — recorder would capture nothing."
+        )
+
+    # atexit (clean exit + KeyboardInterrupt) AND SIGTERM handler so we
+    # clean up on `kill <pid>` or terminal close as well as Ctrl-C.
     import atexit
+    import signal
     atexit.register(_cleanup_pw_xvfb)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            signal.signal(sig, lambda s, f: (_cleanup_pw_xvfb(), os._exit(128 + s)))
+        except (ValueError, OSError):
+            pass  # not in main thread, etc.
     return PW_RECORD_DISPLAY
 
 

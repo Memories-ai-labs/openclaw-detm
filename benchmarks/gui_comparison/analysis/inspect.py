@@ -271,6 +271,11 @@ def main() -> int:
                         "so it can be Read into context")
     p.add_argument("--pane", action="store_true",
                    help="(detail mode) print the tmux pane text (DETM trials)")
+    # NOTE: --export / --export-all flags were planned but not yet
+    # implemented; removed from the parser so they don't silently no-op.
+    # The per-trial folder under results/<run>/<family>__<model>/<task>/
+    # already contains all the artifacts a debugger would want — copying
+    # to a polished bundle is a future enhancement.
     args = p.parse_args()
 
     if args.list:

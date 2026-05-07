@@ -235,18 +235,25 @@ class DETMRunner(RunnerBase):
         self, task_id: str, run_id: str, prompt: str
     ) -> None:
         """Kill any existing tmux session named `self.tmux_session` and
-        start a fresh one running:
+        start a fresh one running openclaw tui with the prompt as
+        --message.
 
-            openclaw tui --session <key> --message "$(cat <tmpfile>)"
+        Why the indirect Python wrapper instead of `openclaw tui
+        --message "$(cat ...)"`:
 
-        --message delivers the prompt as the initial user message, so
-        the agent starts working immediately. The prompt is written to
-        a tmpfile and read via shell-substitution because tmux
-        `send-keys` interprets embedded \\n in the command string as
-        Enter keys — passing a multi-line command directly causes the
-        shell to get stuck in a quoted-string continuation. The
-        tmpfile-via-$(cat) trick keeps the actual `tmux send-keys`
-        command on a single line.
+          - tmux send-keys interprets embedded \\n in the command
+            string as Enter keys. So we can't paste a multi-line
+            command directly.
+          - The "$(cat tmpfile)" workaround uses shell command
+            substitution but the result lands inside double quotes —
+            so any `$`, backticks, or `\\` in the prompt get
+            re-interpreted by the shell. With user-controlled task
+            content that's fragile (a prompt containing `$10` becomes
+            empty; one containing `` `whoami` `` would execute it).
+          - A small Python wrapper script reads the file and passes
+            its content as a literal argv element to openclaw via
+            subprocess.run([...]) — no shell interpretation
+            whatsoever. Robust regardless of prompt content.
 
         The tmux session is just a TTY container; the TUI process needs
         a terminal. We wait for the openclaw header to appear (proof
@@ -273,17 +280,29 @@ class DETMRunner(RunnerBase):
             "-x", "220", "-y", "60",
         ], timeout=10)
 
-        # Write the prompt to a tmpfile (handles arbitrary content
-        # including newlines, quotes, backticks). Shell will read it
-        # via $(cat ...) as a single argument to --message.
+        # Write the prompt to a tmpfile.
         msg_path = Path(f"/tmp/bench_oc_msg_{sess_key}.txt")
         msg_path.write_text(prompt)
 
-        # Single-line command — no embedded newlines for tmux to misinterpret.
-        cmd_str = (
-            f'openclaw tui --session {shlex.quote(sess_key)} '
-            f'--message "$(cat {shlex.quote(str(msg_path))})"'
+        # Write a one-shot Python wrapper that reads the file and
+        # invokes openclaw via subprocess.run with list-form argv —
+        # zero shell interpretation of the prompt content.
+        wrapper_path = Path(f"/tmp/bench_oc_run_{sess_key}.py")
+        wrapper_path.write_text(
+            "#!/usr/bin/env python3\n"
+            "import sys, os, subprocess\n"
+            f"with open({json.dumps(str(msg_path))}) as f:\n"
+            "    msg = f.read()\n"
+            "os.execvp('openclaw', ['openclaw', 'tui',\n"
+            f"    '--session', {json.dumps(sess_key)},\n"
+            "    '--message', msg])\n"
         )
+        wrapper_path.chmod(0o700)
+
+        # Single-line command — only the wrapper path goes through
+        # send-keys. The wrapper itself reads the prompt file with no
+        # shell involvement.
+        cmd_str = f"python3 {shlex.quote(str(wrapper_path))}"
         subprocess.check_call([
             "tmux", "send-keys", "-t", self.tmux_session,
             cmd_str,

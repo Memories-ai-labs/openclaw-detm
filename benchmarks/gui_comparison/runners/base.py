@@ -47,13 +47,18 @@ class TaskSpec:
     @classmethod
     def from_yaml(cls, path: Path) -> "TaskSpec":
         data = yaml.safe_load(path.read_text())
+        # Hard sanity caps so a YAML typo (e.g. max_duration_s: 60000)
+        # can't blow a 1000-min budget on a single task. 1800s = 30 min
+        # is well above any realistic task budget for our 15 tasks.
+        max_actions = min(int(data["max_actions"]), 200)
+        max_duration_s = min(int(data["max_duration_s"]), 1800)
         return cls(
             id=data["id"],
             title=data["title"],
             tier=int(data["tier"]),
             prompt=data["prompt"],
-            max_actions=int(data["max_actions"]),
-            max_duration_s=int(data["max_duration_s"]),
+            max_actions=max_actions,
+            max_duration_s=max_duration_s,
             judge_rubric=data["judge_rubric"],
             family_constraints=data.get("family_constraints") or {},
         )
