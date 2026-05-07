@@ -203,7 +203,11 @@ def _post_judge(messages: list[dict], api_key: str, model: str) -> dict:
                 json={
                     "model": model,
                     "messages": messages,
-                    "max_tokens": 1024,
+                    # Bumped from 1024 — Gemini's video reasoning often
+                    # produces a long preamble before the JSON verdict.
+                    # 1024 was getting cut off mid-string and the parser
+                    # saw "unparseable" -> false fallback to frames.
+                    "max_tokens": 4096,
                 },
             )
         if resp.status_code != 200:
@@ -283,30 +287,52 @@ def judge_video(
     use_model = model or JUDGE_MODEL
     size = recording_path.stat().st_size
 
-    # Path A: inline video, if size is reasonable and we're not forced
-    # into frames mode.
+    # Path A: inline video. Verified that OpenRouter+Gemini accepts the
+    # `{"type": "video_url", "video_url": {"url": "data:video/mp4;base64,..."}}`
+    # block format. Skip A only when explicitly forced or video too big
+    # to base64 inline (would balloon the request to >50MB).
+    inline_attempted = False
+    inline_reason: str = ""
     if not force_frames and size <= MAX_INLINE_VIDEO_BYTES:
-        msg = _build_message_with_video(task, final_answer, recording_path)
-        messages = [{"role": "system", "content": _SYSTEM}, msg]
-        verdict = _post_judge(messages, api_key, use_model)
-        if "judge HTTP 4" not in (verdict.get("reason") or "") and \
-           "unparseable" not in (verdict.get("reason") or ""):
-            verdict["mode"] = "inline_video"
-            return verdict
-        # Else fall through to frames.
+        inline_attempted = True
+        try:
+            msg = _build_message_with_video(task, final_answer, recording_path)
+            messages = [{"role": "system", "content": _SYSTEM}, msg]
+            verdict = _post_judge(messages, api_key, use_model)
+            reason_str = verdict.get("reason", "") or ""
+            # Fall through ONLY for transport / parse failures, not for
+            # "verdict says false" (that's a real verdict).
+            transport_failure = (
+                reason_str.startswith("video judge HTTP")
+                or "unparseable" in reason_str
+                or "no choices" in reason_str
+                or "HTTP call failed" in reason_str
+            )
+            if not transport_failure:
+                verdict["mode"] = "inline_video"
+                return verdict
+            inline_reason = reason_str
+        except Exception as e:
+            inline_reason = f"inline path exception: {e}"
 
-    # Path B: extracted frames.
+    # Path B: extracted frames. Only reach here on inline transport
+    # failure, force_frames=True, or video too big to inline.
     frames = _extract_frames(recording_path)
     if not frames:
         return {
             "success": False, "partial_credit": 0.0,
-            "reason": "ffmpeg frame extraction failed (and inline video also failed)",
+            "reason": (
+                f"ffmpeg frame extraction failed; "
+                f"inline path: {inline_reason or 'not attempted'}"
+            ),
             "mode": "error",
         }
     msg = _build_message_with_frames(task, final_answer, frames)
     messages = [{"role": "system", "content": _SYSTEM}, msg]
     verdict = _post_judge(messages, api_key, use_model)
     verdict["mode"] = f"frames({len(frames)})"
+    if inline_attempted and inline_reason:
+        verdict["inline_failure_reason"] = inline_reason
     return verdict
 
 
