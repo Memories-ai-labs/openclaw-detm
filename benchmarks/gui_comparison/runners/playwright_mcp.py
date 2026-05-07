@@ -55,6 +55,64 @@ DISPLAY = os.environ.get("BENCH_DISPLAY", ":99")
 # with DETM's browser on :99).
 HEADLESS = os.environ.get("BENCH_PLAYWRIGHT_HEADLESS", "0") == "1"
 
+# When recording is enabled (BENCH_RECORD_VIDEO=1), we spawn a dedicated
+# Xvfb on this display number for Playwright (so we can record JUST the
+# Playwright Chromium without the noise/contention from the main XFCE
+# desktop on :99, and so headless mode still produces capturable video).
+PW_RECORD_DISPLAY = os.environ.get("BENCH_PLAYWRIGHT_RECORD_DISPLAY", ":101")
+
+# Module-level state for the dedicated Xvfb (one per orchestrator run).
+_pw_xvfb_proc: Optional[subprocess.Popen] = None
+
+
+def _ensure_pw_xvfb() -> str:
+    """Spawn (or reuse) the dedicated Xvfb on PW_RECORD_DISPLAY. Returns
+    the display string. Idempotent; called once per orchestrator process.
+    Cleaned up via atexit."""
+    global _pw_xvfb_proc
+    if _pw_xvfb_proc is not None and _pw_xvfb_proc.poll() is None:
+        return PW_RECORD_DISPLAY
+    if not shutil.which("Xvfb"):
+        raise RuntimeError("Xvfb not installed — needed for Playwright recording")
+    _pw_xvfb_proc = subprocess.Popen(
+        ["Xvfb", PW_RECORD_DISPLAY, "-screen", "0", "1920x1080x24"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    # Wait briefly for Xvfb to become ready.
+    import time as _time
+    for _ in range(30):
+        try:
+            r = subprocess.run(
+                ["xdpyinfo", "-display", PW_RECORD_DISPLAY],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+            if r.returncode == 0:
+                break
+        except Exception:
+            pass
+        _time.sleep(0.2)
+    # Best-effort cleanup at process exit.
+    import atexit
+    atexit.register(_cleanup_pw_xvfb)
+    return PW_RECORD_DISPLAY
+
+
+def _cleanup_pw_xvfb() -> None:
+    global _pw_xvfb_proc
+    if _pw_xvfb_proc is None:
+        return
+    try:
+        _pw_xvfb_proc.terminate()
+        try:
+            _pw_xvfb_proc.wait(timeout=3)
+        except Exception:
+            _pw_xvfb_proc.kill()
+    except Exception:
+        pass
+    _pw_xvfb_proc = None
+
 
 # ── MCP client glue (async) ──────────────────────────────────────────────
 
@@ -218,13 +276,31 @@ class PlaywrightMCPRunner(RunnerBase):
         prompt_tokens_total = 0
         completion_tokens_total = 0
 
-        # Optional screen recording (BENCH_RECORD_VIDEO=1). Only useful
-        # when Playwright is headed (BENCH_PLAYWRIGHT_HEADLESS=0) — when
-        # headless, Chromium renders off-screen and the recording is blank.
-        from .recorder import DisplayRecorder
-        recorder = DisplayRecorder(out_path=run_dir / "recording.mp4") if not HEADLESS else None
-        if recorder:
-            recorder.start()
+        # Optional screen recording (BENCH_RECORD_VIDEO=1). For Playwright
+        # specifically, we spawn a dedicated Xvfb on :101 (or whatever
+        # BENCH_PLAYWRIGHT_RECORD_DISPLAY is set to) and run Chromium
+        # headed there — that way (a) the recording shows the actual
+        # Chromium window, (b) we don't fight the main :99 desktop for
+        # screen real estate, (c) headless can stay disabled (so video
+        # actually contains pixels) without polluting the user's display.
+        from .recorder import DisplayRecorder, ENABLED as RECORDING_ENABLED
+        recorder: Optional[DisplayRecorder] = None
+        pw_display = DISPLAY
+        pw_force_headed = False
+        if RECORDING_ENABLED:
+            try:
+                pw_display = _ensure_pw_xvfb()
+                pw_force_headed = True  # video needs a rendered window
+                recorder = DisplayRecorder(
+                    out_path=run_dir / "recording.mp4",
+                    display=pw_display,
+                )
+                recorder.start()
+            except Exception as e:
+                print(f"  ⚠ Playwright recording setup failed: {e} — continuing without")
+                recorder = None
+                pw_display = DISPLAY
+                pw_force_headed = False
 
         started_at = self.now_iso()
         t0 = time.time()
@@ -252,7 +328,10 @@ class PlaywrightMCPRunner(RunnerBase):
             "--image-responses", "allow",
             "--viewport-size", "1920,1080",
         ]
-        if HEADLESS:
+        # Headless behavior: respect HEADLESS env, BUT force headed when
+        # we're recording (otherwise the video would be blank).
+        run_headless = HEADLESS and not pw_force_headed
+        if run_headless:
             playwright_args.append("--headless")
         if STORAGE_STATE.exists():
             playwright_args += ["--isolated", "--storage-state", str(STORAGE_STATE)]
@@ -264,7 +343,7 @@ class PlaywrightMCPRunner(RunnerBase):
         server = StdioServerParameters(
             command="npx",
             args=playwright_args,
-            env={**os.environ, "DISPLAY": DISPLAY},
+            env={**os.environ, "DISPLAY": pw_display},
         )
 
         async with AsyncExitStack() as stack:
