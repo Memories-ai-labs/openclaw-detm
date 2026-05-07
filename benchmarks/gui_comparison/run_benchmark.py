@@ -78,6 +78,82 @@ def _make_runner(family: str, model: str):
     raise ValueError(f"unknown family: {family}")
 
 
+def _write_progress_table(
+    run_id: str,
+    plan: list[tuple[str, str, str]],
+    statuses: dict[tuple[str, str, str], dict],
+    started_at: float,
+) -> None:
+    """Atomically (re)write results/<run_id>/progress.md with the current
+    state of every (family, model, task) trial in `plan`. Called once at
+    orchestrator start (all rows = pending), then again after each trial
+    transitions state. The user can `watch -n 5 cat progress.md` to follow
+    the sweep live."""
+    run_dir = RESULTS_DIR / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Counts for the header.
+    n_total = len(plan)
+    completed_states = {"completed", "completed_no_json", "failed", "timeout",
+                         "max_actions", "error", "construct_failed"}
+    n_done = sum(1 for k in plan if statuses[k].get("status") in completed_states)
+    n_running = sum(1 for k in plan if statuses[k].get("status") == "running")
+    n_pending = sum(1 for k in plan if statuses[k].get("status") == "pending")
+    n_ok = sum(
+        1 for k in plan
+        if (statuses[k].get("log_score") or 0) >= 0.99
+    )
+    elapsed = time.time() - started_at
+
+    md = [
+        f"# Run: `{run_id}`",
+        "",
+        f"- Progress: **{n_done}/{n_total}** complete "
+        f"({n_running} running, {n_pending} pending)",
+        f"- Perfect (log_score ≥ 0.99): {n_ok}",
+        f"- Elapsed: {elapsed/60:.1f} min",
+        "",
+        "Watch live: `watch -n 5 cat " + str(run_dir / "progress.md") + "`",
+        "",
+        "| family | model | task | status | log_score | video_score | duration_s | actions |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+
+    def _fmt(v):
+        if v is None:
+            return "-"
+        if isinstance(v, float):
+            return f"{v:.2f}"
+        return str(v)
+
+    for (fam, mdl, task_id) in plan:
+        s = statuses.get((fam, mdl, task_id), {"status": "pending"})
+        status_icon = {
+            "pending": "⏳ pending",
+            "running": "🟡 running",
+            "completed": "✅ completed",
+            "completed_no_json": "⚠️ completed_no_json",
+            "failed": "❌ failed",
+            "timeout": "⏱ timeout",
+            "max_actions": "🛑 max_actions",
+            "error": "💥 error",
+            "construct_failed": "💥 construct_failed",
+        }.get(s.get("status", "?"), s.get("status", "?"))
+        md.append(
+            f"| {fam} | {mdl} | {task_id} | {status_icon} | "
+            f"{_fmt(s.get('log_score'))} | {_fmt(s.get('video_score'))} | "
+            f"{_fmt(s.get('duration_s'))} | {_fmt(s.get('actions'))} |"
+        )
+
+    text = "\n".join(md) + "\n"
+
+    # Atomic write so the user never sees a half-written file.
+    out = run_dir / "progress.md"
+    tmp = out.with_suffix(".md.tmp")
+    tmp.write_text(text)
+    tmp.replace(out)
+
+
 def _judge_run(run_dir: Path, task: TaskSpec, final_answer: str) -> dict:
     screenshot = run_dir / "screenshots" / "final.png"
     # Load the action log so the judge can apply rubrics that reference
@@ -137,14 +213,43 @@ def main() -> int:
     print()
 
     summary = []
+
+    # Build the (family, model, task) plan up front so we can show a
+    # live progress table that gets updated after each trial finishes.
+    plan: list[tuple[str, str, str]] = [
+        (family, model, task.id)
+        for family in families
+        for model in models
+        for task in tasks
+    ]
+    statuses: dict[tuple[str, str, str], dict] = {
+        c: {"status": "pending"} for c in plan
+    }
+    started_at_run = time.time()
+    _write_progress_table(args.run_id, plan, statuses, started_at_run)
+    print(
+        f"\nProgress table: {RESULTS_DIR / args.run_id / 'progress.md'}\n"
+        f"(updated after each trial — `watch -n 5 cat <path>` to follow live)\n"
+    )
+
     for family in families:
         for model in models:
             try:
                 runner = _make_runner(family, model)
             except Exception as e:
                 print(f"[{family} / {model}] runner construction failed: {e}")
+                # Mark all of this (family, model)'s remaining trials as
+                # construct_failed so the progress table reflects it.
+                for task in tasks:
+                    statuses[(family, model, task.id)] = {
+                        "status": "construct_failed",
+                        "error": str(e)[:200],
+                    }
+                _write_progress_table(args.run_id, plan, statuses, started_at_run)
                 continue
             for task in tasks:
+                statuses[(family, model, task.id)]["status"] = "running"
+                _write_progress_table(args.run_id, plan, statuses, started_at_run)
                 run_dir = make_run_dir(args.run_id, family, model, task.id)
                 print(f"\n────────────────────────────────────────────────────────")
                 print(f"[{family} / {model}] task={task.id}  →  {run_dir.relative_to(RESULTS_DIR.parent)}")
@@ -206,6 +311,24 @@ def main() -> int:
                         print(f"  ✗ video judge failed: {e}")
                 elif args.video_judge:
                     print(f"  (video-judge requested but no recording.mp4)")
+
+                # Update progress table with this trial's outcome.
+                key = (family, model, task.id)
+                vverdict_path = run_dir / "judge_video_verdict.json"
+                video_score = None
+                if vverdict_path.exists():
+                    try:
+                        video_score = json.loads(vverdict_path.read_text()).get("partial_credit")
+                    except Exception:
+                        pass
+                statuses[key] = {
+                    "status": result.termination_reason,
+                    "log_score": result.judge_partial_credit,
+                    "video_score": video_score,
+                    "duration_s": round(result.duration_s, 1),
+                    "actions": result.n_tool_calls,
+                }
+                _write_progress_table(args.run_id, plan, statuses, started_at_run)
 
                 summary.append(result)
 
