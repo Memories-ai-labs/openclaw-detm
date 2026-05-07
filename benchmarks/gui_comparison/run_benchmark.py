@@ -116,6 +116,11 @@ def main() -> int:
                    help="Re-run only the judge against existing run dirs; skip agent runs")
     p.add_argument("--no-judge", action="store_true",
                    help="Skip the judge step (still records metrics)")
+    p.add_argument("--video-judge", action="store_true",
+                   help="ALSO run the gemini-3.1-pro video judge on the "
+                        "trial's recording.mp4 (requires BENCH_RECORD_VIDEO=1 "
+                        "or recording.mp4 already present). Costs more; "
+                        "off by default.")
     args = p.parse_args()
 
     if args.rejudge:
@@ -177,6 +182,30 @@ def main() -> int:
                         print(f"  reason: {verdict['reason'][:200]}")
                     except Exception as e:
                         print(f"  ✗ judge failed: {e}")
+
+                # Optional second-pass video judge (gemini-3.1-pro).
+                # Independent of the log judge — produces its own verdict
+                # in judge_video_verdict.json so the writeup can show
+                # both side by side and flag disagreement.
+                recording = run_dir / "recording.mp4"
+                if args.video_judge and recording.exists():
+                    print(f"  video-judging (gemini-3.1-pro)...")
+                    try:
+                        from gui_comparison.judges.video_judge import judge_video
+                        v_verdict = judge_video(
+                            task, result.final_answer, recording,
+                        )
+                        (run_dir / "judge_video_verdict.json").write_text(
+                            json.dumps(v_verdict, indent=2)
+                        )
+                        print(f"  video judge: success={v_verdict.get('success')} "
+                              f"score={v_verdict.get('partial_credit', 0):.2f} "
+                              f"mode={v_verdict.get('mode')}")
+                        print(f"  v-reason: {(v_verdict.get('reason') or '')[:200]}")
+                    except Exception as e:
+                        print(f"  ✗ video judge failed: {e}")
+                elif args.video_judge:
+                    print(f"  (video-judge requested but no recording.mp4)")
 
                 summary.append(result)
 
