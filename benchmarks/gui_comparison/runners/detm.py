@@ -32,10 +32,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import time
-import uuid
 from pathlib import Path
 from typing import Optional
 from urllib.request import Request, urlopen
@@ -148,41 +148,9 @@ def _tmux_session_exists(name: str) -> bool:
         return False
 
 
-def _tmux_paste_prompt(session: str, prompt: str) -> None:
-    """Send prompt to the OpenClaw TUI in `session`, then submit.
-
-    Critical: newlines in a tmux paste-buffer are interpreted as Enter
-    keys, which submit partial messages — the OpenClaw TUI then sees a
-    sequence of separate user turns and only the last line lands as
-    the actual prompt. We work around this by:
-      1. Replacing any literal newline with a placeholder string the
-         LLM can read back as a paragraph break.
-      2. Pasting the now single-line prompt.
-      3. Sending one Enter to submit.
-
-    The tmux buffer name is per-call (UUID-suffixed) so a stale buffer
-    from a previous run can't get accidentally pasted if `load-buffer`
-    fails.
-    """
-    flat = prompt.replace("\r\n", "\n").replace("\n", "  //  ")
-    buf_name = f"bench_{uuid.uuid4().hex[:8]}"
-    tmp = Path(f"/tmp/{buf_name}.txt")
-    tmp.write_text(flat)
-    try:
-        _tmux("load-buffer", "-b", buf_name, str(tmp))
-        _tmux("paste-buffer", "-b", buf_name, "-t", session)
-        time.sleep(0.5)
-        _tmux("send-keys", "-t", session, "Enter")
-    finally:
-        # Clean up the tmux buffer (best-effort).
-        try:
-            _tmux("delete-buffer", "-b", buf_name)
-        except Exception:
-            pass
-        try:
-            tmp.unlink()
-        except FileNotFoundError:
-            pass
+# `_tmux_paste_prompt` is gone — superseded by passing the prompt as
+# `openclaw tui --message <prompt>` at TUI startup, which preserves
+# newlines and starts the agent immediately. See _recreate_oc_session.
 
 
 def _tmux_capture(session: str, lines: int = 4000) -> str:
@@ -263,13 +231,28 @@ class DETMRunner(RunnerBase):
             )
         return h
 
-    def _recreate_oc_session(self, task_id: str, run_id: str) -> None:
+    def _recreate_oc_session(
+        self, task_id: str, run_id: str, prompt: str
+    ) -> None:
         """Kill any existing tmux session named `self.tmux_session` and
-        start a fresh one running `openclaw tui --session <unique>` so each
-        benchmark task lands in its own OpenClaw conversation (no cross-task
-        context bleed).
+        start a fresh one running:
 
-        Polls the pane until the TUI's "idle" status appears, then returns.
+            openclaw tui --session <key> --message "$(cat <tmpfile>)"
+
+        --message delivers the prompt as the initial user message, so
+        the agent starts working immediately. The prompt is written to
+        a tmpfile and read via shell-substitution because tmux
+        `send-keys` interprets embedded \\n in the command string as
+        Enter keys — passing a multi-line command directly causes the
+        shell to get stuck in a quoted-string continuation. The
+        tmpfile-via-$(cat) trick keeps the actual `tmux send-keys`
+        command on a single line.
+
+        The tmux session is just a TTY container; the TUI process needs
+        a terminal. We wait for the openclaw header to appear (proof
+        the TUI connected) and then return — the agent is already
+        processing the prompt by that point.
+
         Raises RuntimeError if the TUI doesn't come up within 60s.
         """
         # Sanitize task_id + run_id for the openclaw --session arg (alnum +
@@ -284,29 +267,42 @@ class DETMRunner(RunnerBase):
         )
         time.sleep(0.5)
 
-        # Detached new session.
+        # Detached new session, wider+taller than default for long output.
         subprocess.check_call([
             "tmux", "new-session", "-d", "-s", self.tmux_session,
             "-x", "220", "-y", "60",
         ], timeout=10)
 
-        # Launch the TUI inside it.
+        # Write the prompt to a tmpfile (handles arbitrary content
+        # including newlines, quotes, backticks). Shell will read it
+        # via $(cat ...) as a single argument to --message.
+        msg_path = Path(f"/tmp/bench_oc_msg_{sess_key}.txt")
+        msg_path.write_text(prompt)
+
+        # Single-line command — no embedded newlines for tmux to misinterpret.
+        cmd_str = (
+            f'openclaw tui --session {shlex.quote(sess_key)} '
+            f'--message "$(cat {shlex.quote(str(msg_path))})"'
+        )
         subprocess.check_call([
             "tmux", "send-keys", "-t", self.tmux_session,
-            f"openclaw tui --session {sess_key}",
+            cmd_str,
             "Enter",
         ], timeout=10)
 
-        # Wait for the TUI's idle state to appear in the pane.
+        # Wait for the TUI to connect — the openclaw header line tells us.
+        # We DON'T wait for "idle" because with --message the agent starts
+        # processing immediately and may never go idle before producing
+        # the answer.
         deadline = time.time() + 60.0
         while time.time() < deadline:
             try:
                 pane = _tmux_capture(self.tmux_session, lines=200)
             except Exception:
                 pane = ""
-            if f"session {sess_key}" in pane and (
-                "idle" in pane or "connected" in pane
-            ):
+            # The TUI prints "openclaw tui - ws://..." once connected,
+            # plus a "session agent:main:<key>" line.
+            if "openclaw tui -" in pane and sess_key in pane:
                 return
             time.sleep(1.0)
         raise RuntimeError(
@@ -371,24 +367,28 @@ class DETMRunner(RunnerBase):
             pass
 
     def _build_prompt(self, task: TaskSpec, sentinel: str) -> str:
-        # Note: returned newlines will be flattened by _tmux_paste_prompt
-        # into "  //  " separators; the LLM can still parse the structure.
-        # Wraps the answer in <<<BENCH_ANSWER_START>>> / <<<BENCH_ANSWER_END>>>
-        # markers so the runner can extract just the final answer (not the
-        # entire tmux scrollback including the prompt itself).
+        """Build the prompt that gets passed to `openclaw tui --message`.
+
+        Newlines are preserved verbatim (no flattening — shell-escape via
+        shlex.quote in _recreate_oc_session handles them). The marker +
+        sentinel pattern is unchanged: the runner extracts the answer
+        between the LAST occurrence of <<<BENCH_ANSWER_START>>> and
+        <<<BENCH_ANSWER_END>>>, and waits for the sentinel to know the
+        agent is done.
+        """
         return (
-            f"DETM ONLY\n"
-            f"{task.prompt}\n"
-            f"---\n"
+            f"DETM ONLY\n\n"
+            f"{task.prompt}\n\n"
+            f"---\n\n"
             f"When you finish the task (success OR failure), produce your "
             f"final JSON answer wrapped in these EXACT markers, each on "
-            f"their own line:\n"
+            f"their own line:\n\n"
             f"<<<BENCH_ANSWER_START>>>\n"
             f"```json\n"
             f"{{... your JSON answer here ...}}\n"
             f"```\n"
-            f"<<<BENCH_ANSWER_END>>>\n"
-            f"Then on a new line type exactly: {sentinel}\n"
+            f"<<<BENCH_ANSWER_END>>>\n\n"
+            f"Then on a new line type exactly: {sentinel}\n\n"
             f"Do not type {sentinel} before you have produced both markers "
             f"and the JSON between them. Do not abbreviate the markers."
         )
@@ -468,16 +468,21 @@ class DETMRunner(RunnerBase):
         actions_log: list[dict] = []
         messages_log: list[dict] = []
 
+        # Build the prompt BEFORE we spin up the session — we pass it as
+        # `--message` so the agent starts working immediately.
+        prompt = self._build_prompt(task, sentinel)
+
         try:
             self._verify_daemon()
             # Cancel any in-flight gui_agent left over from a prior run
             # before we start. This is also our defense against runs where
             # the previous task's agent is still navigating when we arrive.
             _cancel_all_gui_agents()
-            # Always recreate the tmux/OpenClaw session so this task starts
-            # in a completely fresh conversation (no context bleed from
-            # earlier tasks in the same sweep).
-            self._recreate_oc_session(task.id, run_id)
+            # Recreate the tmux/OpenClaw session WITH the prompt as the
+            # initial message. No paste-buffer dance, no newline flattening.
+            self._reset_browser()
+            tasks_before = _list_task_ids()
+            self._recreate_oc_session(task.id, run_id, prompt)
         except Exception as e:
             r = RunResult(
                 task_id=task.id, family=self.family, model=self.model,
@@ -493,25 +498,36 @@ class DETMRunner(RunnerBase):
             save_run_artifacts(run_dir, r)
             return r
 
-        self._reset_browser()
-        tasks_before = _list_task_ids()
-
         # Optional screen recording (BENCH_RECORD_VIDEO=1).
         from .recorder import DisplayRecorder
         recorder = DisplayRecorder(out_path=run_dir / "recording.mp4")
         recorder.start()
 
-        prompt = self._build_prompt(task, sentinel)
+        # Capture the baseline pane AFTER the user message has been
+        # rendered (otherwise our sentinel-count baseline is wrong:
+        # baseline=0, then once openclaw renders the prompt the sentinel
+        # appears in the pane, making the count grow and tricking
+        # _wait_for_sentinel into thinking the agent finished).
+        # We detect "prompt rendered" by waiting for a chunk of the
+        # prompt's tail to appear in the pane.
+        prompt_tail = prompt[-60:].strip()
+        render_deadline = time.time() + 30.0
+        baseline_pane = ""
+        while time.time() < render_deadline:
+            try:
+                baseline_pane = _tmux_capture(self.tmux_session)
+            except subprocess.CalledProcessError:
+                baseline_pane = ""
+            if prompt_tail and prompt_tail in baseline_pane:
+                break
+            time.sleep(1.0)
+        baseline_count = baseline_pane.count(sentinel)
+
+        # Now that setup is done (TUI up + prompt rendered), start the
+        # task clock. duration_s should reflect agent work time, not
+        # setup overhead.
         started_at = self.now_iso()
         t0 = time.time()
-        _tmux_paste_prompt(self.tmux_session, prompt)
-        # Brief pause so the paste lands in the pane, then snapshot baseline.
-        time.sleep(2.0)
-        try:
-            baseline_pane = _tmux_capture(self.tmux_session)
-        except subprocess.CalledProcessError:
-            baseline_pane = ""
-        baseline_count = baseline_pane.count(sentinel)
 
         # Wait for the agent to finish or time out.
         pane, saw_sentinel = self._wait_for_sentinel(
