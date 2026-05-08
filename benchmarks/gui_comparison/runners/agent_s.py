@@ -102,11 +102,48 @@ def _ensure_chrome_running() -> bool:
     chrome_bin = shutil.which("google-chrome") or shutil.which("chromium")
     if not chrome_bin:
         return False
+
+    # Wipe Chrome's last-session state files so the "Restore pages?
+    # Chrome didn't shut down correctly." popup doesn't appear on next
+    # launch. This popup blocks the agent and the
+    # --disable-session-crashed-bubble flag isn't reliable; deleting
+    # the session-restore files is the only thing that actually works.
+    profile = Path.home() / ".config" / "google-chrome" / "Default"
+    if profile.exists():
+        for fname in ("Last Session", "Last Tabs",
+                       "Current Session", "Current Tabs"):
+            p = profile / fname
+            try:
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                pass
+        # Also patch Chrome's profile preferences to mark the last exit
+        # as clean. Chrome reads this on startup to decide whether to
+        # show the bubble.
+        prefs = profile / "Preferences"
+        if prefs.exists():
+            try:
+                d = json.loads(prefs.read_text())
+                d.setdefault("profile", {})["exit_type"] = "Normal"
+                d.setdefault("profile", {})["exited_cleanly"] = True
+                prefs.write_text(json.dumps(d))
+            except Exception:
+                pass
+
     print(f"  ⚠ no Chrome on {DISPLAY} — launching {chrome_bin} about:blank")
     try:
         subprocess.Popen(
-            [chrome_bin, "--no-first-run", "--no-default-browser-check",
-             "--start-maximized", "about:blank"],
+            [
+                chrome_bin,
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-session-crashed-bubble",
+                "--disable-infobars",
+                "--restore-last-session=false",
+                "--start-maximized",
+                "about:blank",
+            ],
             env=env,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -115,6 +152,7 @@ def _ensure_chrome_running() -> bool:
         print(f"  ⚠ chrome launch failed: {e}")
         return False
     # Wait up to 10s for the window to appear.
+    wid = ""
     for _ in range(20):
         time.sleep(0.5)
         try:
@@ -123,10 +161,45 @@ def _ensure_chrome_running() -> bool:
                 env=env, text=True, stderr=subprocess.DEVNULL, timeout=5,
             ).strip()
             if wid:
-                return True
+                break
         except subprocess.CalledProcessError:
             continue
-    return False
+    if not wid:
+        return False
+
+    # Dismiss any startup popups Chrome may show ("Restore pages?",
+    # "Can't update Chrome", "Set as default browser", etc.). They sit
+    # in the top-right and have an X button at approximately
+    # (window_right - 30, 140). Click there a few times — harmless if
+    # nothing is there.
+    try:
+        subprocess.run(["xdotool", "windowactivate", "--sync", wid],
+                       env=env, timeout=5, check=False)
+        time.sleep(0.5)
+        # Get window dimensions to compute the close-button position.
+        geom = subprocess.check_output(
+            ["xdotool", "getwindowgeometry", "--shell", wid],
+            env=env, text=True, stderr=subprocess.DEVNULL, timeout=5,
+        )
+        width = 1920
+        for line in geom.splitlines():
+            if line.startswith("WIDTH="):
+                width = int(line.split("=")[1])
+        # Approximate close-button positions for the popup banners
+        # (different popups have slightly different layouts).
+        for x, y in [(width - 30, 140), (width - 30, 195), (width - 50, 140)]:
+            subprocess.run(
+                ["xdotool", "mousemove", "--sync", str(x), str(y),
+                 "click", "1"],
+                env=env, timeout=5, check=False,
+            )
+            time.sleep(0.3)
+        # Move cursor away so it doesn't hover over anything important.
+        subprocess.run(["xdotool", "mousemove", "--sync", "100", "500"],
+                       env=env, timeout=5, check=False)
+    except Exception:
+        pass
+    return True
 
 
 def _reset_browser() -> None:
@@ -296,18 +369,25 @@ class AgentSRunner(RunnerBase):
             save_run_artifacts(run_dir, r)
             return r
 
-        # Augment the prompt: instruct the agent to write its final JSON
-        # answer to a known file before signaling DONE. (The native
-        # Agent S API has no "speak" channel, so we have to bridge via
-        # filesystem.)
+        # Augment the prompt: instruct the agent to embed its final
+        # JSON answer in its narration (final "thought") before signaling
+        # DONE. Earlier versions also offered "open a terminal and write
+        # to /tmp/..." as the primary route — but Agent S3's training is
+        # OSWorld-flavored (different desktop, different keybindings, an
+        # 'osworld-public-evaluation' sudo password baked in) and most
+        # agents waste their whole budget trying to open a terminal that
+        # doesn't behave like the one in their training. Keeping the
+        # narration path simpler removes that distraction.
         addendum = (
             "\n\n--- IMPORTANT (benchmark mode) ---\n"
-            "Before signaling DONE, write your final JSON answer to "
-            f"{ANSWER_FILE} by opening a terminal (right-click desktop → "
-            "Open Terminal Here) and running:\n"
-            f"  echo 'YOUR_JSON_HERE' > {ANSWER_FILE}\n"
-            "If you cannot open a terminal, embed the JSON in your "
-            "narration (final 'thought') in a ```json fenced block."
+            "Before signaling DONE, embed your final JSON answer in "
+            "your narration (the 'thought' / 'plan' field of your last "
+            "response) inside a ```json ... ``` fenced code block. "
+            "The benchmark runner reads your last thought to extract the "
+            "answer. Do NOT try to open a terminal or write to a file — "
+            "the narration path is the only one that's wired up. "
+            "Just navigate the browser, read the answer from the screen, "
+            "and put the JSON in your final thought."
         )
         instruction = task.prompt + addendum
 
