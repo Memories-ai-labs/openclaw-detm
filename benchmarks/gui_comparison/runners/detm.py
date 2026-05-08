@@ -309,35 +309,53 @@ class DETMRunner(RunnerBase):
             "Enter",
         ], timeout=10)
 
-        # Wait for the TUI to connect — the openclaw header line tells us.
-        # We DON'T wait for "idle" because with --message the agent starts
-        # processing immediately and may never go idle before producing
-        # the answer.
+        # Wait for the TUI to connect. The openclaw header
+        # ("openclaw tui - ws://...") prints once at startup, but a chatty
+        # agent can scroll it off the visible scrollback window. The
+        # `sess_key` also appears in the persistent status footer at the
+        # bottom of the TUI ("agent main | session <key> | ..."), which
+        # stays visible regardless of conversation length. So we look
+        # for sess_key (always visible) AND either the header or any
+        # signal that openclaw is past startup (e.g., status indicators
+        # like "connected", "idle", or "thinking" in the footer).
         deadline = time.time() + 60.0
+        seen_header = False
         while time.time() < deadline:
             try:
-                pane = _tmux_capture(self.tmux_session, lines=200)
+                pane = _tmux_capture(self.tmux_session, lines=4000)
             except Exception:
                 pane = ""
-            # The TUI prints "openclaw tui - ws://..." once connected,
-            # plus a "session agent:main:<key>" line.
-            if "openclaw tui -" in pane and sess_key in pane:
+            if "openclaw tui -" in pane:
+                seen_header = True
+            # Footer remains visible — sess_key + any of these footer
+            # markers means the TUI is alive.
+            if sess_key in pane and (
+                seen_header
+                or "connected" in pane
+                or "agent main | session" in pane
+            ):
                 return
             time.sleep(1.0)
         raise RuntimeError(
             f"openclaw tui did not become ready in 60s in session "
-            f"{self.tmux_session}. Last pane head: {pane[:300]!r}"
+            f"{self.tmux_session}. Last pane tail: {pane[-300:]!r}"
         )
 
     def _reset_browser(self) -> None:
         """Best-effort: close all browser tabs, leave one about:blank.
 
-        We use xdotool to send Ctrl+Shift+W (close window) until only one
-        remains, then Ctrl+L → about:blank → Enter. For Chrome this is
-        equivalent to a hard reset of visual state without losing cookies.
+        Auto-launches Chrome if not running so DETM never starts a
+        trial against an empty XFCE desktop (was happening when an
+        earlier daemon restart killed the user's Chrome).
 
         Falls back to no-op if xdotool not present.
         """
+        # Make sure Chrome is alive on the display first. If we can't
+        # spawn one (no chrome binary, or display dead), fall through
+        # to no-op — DETM will at least not crash.
+        from .agent_s import _ensure_chrome_running
+        if not _ensure_chrome_running():
+            return
         if not shutil.which("xdotool"):
             return
         env = {**os.environ, "DISPLAY": DISPLAY}

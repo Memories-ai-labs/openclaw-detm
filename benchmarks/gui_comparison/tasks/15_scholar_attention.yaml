@@ -18,8 +18,8 @@ prompt: |
 
   If you cannot complete the task, return: {"failed": true, "reason": "..."}
 
-max_actions: 30
-max_duration_s: 180
+max_actions: 60
+max_duration_s: 360
 
 judge_rubric: |
   Verify from the agent's final answer AND the final screenshot that:

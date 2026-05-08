@@ -72,6 +72,109 @@ def _execute_pyautogui(code: str) -> None:
     )
 
 
+def _ensure_chrome_running() -> bool:
+    """Ensure a Google Chrome window is alive on $DISPLAY. If none is
+    found (or it's dead), launch one pointing at about:blank using the
+    user's default profile (so cookies / logged-in state survive).
+    Returns True if a Chrome window is alive at exit.
+
+    Without this, tier-3 Agent S3 trials saw an empty XFCE desktop
+    because Chrome on :99 had died at some earlier point (e.g., during
+    a daemon restart). The agent then tried Win+'Google Chrome' to
+    launch it via the app menu, which doesn't work the same way in
+    XFCE as in OSWorld's GNOME — agents wasted their whole budget on
+    that and never reached the task.
+    """
+    if not shutil.which("xdotool"):
+        return False
+    env = {**os.environ, "DISPLAY": DISPLAY}
+    try:
+        wid = subprocess.check_output(
+            ["xdotool", "search", "--limit", "1", "--name", "Google Chrome"],
+            env=env, text=True, stderr=subprocess.DEVNULL, timeout=5,
+        ).strip()
+        if wid:
+            return True
+    except subprocess.CalledProcessError:
+        pass
+
+    # No Chrome window — try to launch one in the background.
+    chrome_bin = shutil.which("google-chrome") or shutil.which("chromium")
+    if not chrome_bin:
+        return False
+    print(f"  ⚠ no Chrome on {DISPLAY} — launching {chrome_bin} about:blank")
+    try:
+        subprocess.Popen(
+            [chrome_bin, "--no-first-run", "--no-default-browser-check",
+             "--start-maximized", "about:blank"],
+            env=env,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception as e:
+        print(f"  ⚠ chrome launch failed: {e}")
+        return False
+    # Wait up to 10s for the window to appear.
+    for _ in range(20):
+        time.sleep(0.5)
+        try:
+            wid = subprocess.check_output(
+                ["xdotool", "search", "--limit", "1", "--name", "Google Chrome"],
+                env=env, text=True, stderr=subprocess.DEVNULL, timeout=5,
+            ).strip()
+            if wid:
+                return True
+        except subprocess.CalledProcessError:
+            continue
+    return False
+
+
+def _reset_browser() -> None:
+    """Reset Chrome on $DISPLAY to about:blank between trials.
+
+    Agent S3 shares the same Chrome on :99 with DETM. Without a reset,
+    each trial inherits whatever the previous trial left in the browser
+    — observed in tier-3 sweep where 4 Agent S3 trials in a row showed
+    the SAME stale Google Scholar page because the agent never managed
+    to navigate away from it.
+
+    Also handles the "no Chrome running" case (auto-launches via
+    _ensure_chrome_running) so Agent S3 isn't shown an empty XFCE
+    desktop and forced to figure out how to launch a browser.
+
+    Best-effort: requires xdotool. Works the same way DETM's
+    _reset_browser does (they share the same Chrome process).
+    """
+    if not _ensure_chrome_running():
+        return
+    if not shutil.which("xdotool"):
+        return
+    env = {**os.environ, "DISPLAY": DISPLAY}
+    try:
+        wid_out = subprocess.check_output(
+            ["xdotool", "search", "--limit", "1", "--name", "Google Chrome"],
+            env=env, text=True, stderr=subprocess.DEVNULL, timeout=5,
+        ).strip()
+    except subprocess.CalledProcessError:
+        return
+    if not wid_out:
+        return
+    try:
+        subprocess.run(["xdotool", "windowactivate", "--sync", wid_out],
+                       env=env, timeout=5, check=False)
+        time.sleep(0.3)
+        subprocess.run(["xdotool", "key", "ctrl+l"],
+                       env=env, timeout=5, check=False)
+        time.sleep(0.3)
+        subprocess.run(["xdotool", "type", "--delay", "10", "about:blank"],
+                       env=env, timeout=10, check=False)
+        subprocess.run(["xdotool", "key", "Return"],
+                       env=env, timeout=5, check=False)
+        time.sleep(0.5)
+    except Exception:
+        pass
+
+
 def _make_agent(model: str, ground_model: str = "bytedance/ui-tars-1.5-7b"):
     """Construct an AgentS3 instance, importing from baselines/agent-s/."""
     if not AGENT_S_DIR.exists():
@@ -170,6 +273,10 @@ class AgentSRunner(RunnerBase):
             ANSWER_FILE.unlink()
         except FileNotFoundError:
             pass
+
+        # Reset browser state between trials so each task starts clean.
+        # See _reset_browser docstring for the bug this fixes.
+        _reset_browser()
 
         try:
             agent = _make_agent(self.model, self.ground_model)
