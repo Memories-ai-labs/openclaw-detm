@@ -297,7 +297,7 @@ class BashGuiProvider(LiveUIProvider):
         cancel_key = session.id if session else f"no-session-{_uuid.uuid4().hex[:8]}"
         cancel_event = register_cancel_event(cancel_key, task_id)
         sid = session.id[:8] if session else "--------"
-        disp_w, disp_h = _get_display_size(display)
+        disp_w, disp_h = await asyncio.get_running_loop().run_in_executor(None, _get_display_size, display)
         _dbg.log("LIVE", f"[{sid}] bash[{self._label}] model={self._model} {disp_w}x{disp_h} task={task_id} timeout={timeout}s")
 
         system_text = _SYSTEM_PROMPT + (f"\n\nContext:\n{context}" if context else "")

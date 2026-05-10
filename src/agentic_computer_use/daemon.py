@@ -498,6 +498,14 @@ async def handle_health(request: web.Request) -> web.Response:
         live_ui_model = config.OPENROUTER_GUI_DIRECT_MODEL
     elif live_ui_backend == "supervised":
         live_ui_model = config.OPENROUTER_LIVE_MODEL  # Gemini supervisor
+    elif live_ui_backend == "openai_cua":
+        live_ui_model = os.environ.get("OPENAI_CUA_MODEL", "gpt-5.4")
+    elif live_ui_backend == "anthropic_cua":
+        live_ui_model = os.environ.get("ANTHROPIC_CUA_MODEL", "claude-opus-4-7")
+    elif live_ui_backend == "gemini_cua":
+        live_ui_model = os.environ.get("GEMINI_CUA_MODEL", "gemini-2.5-computer-use-preview-10-2025")
+    elif live_ui_backend == "kimi_fc":
+        live_ui_model = os.environ.get("KIMI_FC_MODEL", "moonshotai/kimi-k2.5")
     else:
         live_ui_model = config.OPENROUTER_GUI_DIRECT_MODEL
 
@@ -1633,6 +1641,10 @@ def main():
     enable_debug = "--debug" in _sys.argv or os.environ.get("ACU_DEBUG", "0") in ("1", "true", "yes")
     config.ensure_data_dir()
     debug.init(enabled=enable_debug)
+
+    import faulthandler as _faulthandler, signal as _signal
+    _faulthandler.register(_signal.SIGUSR1, all_threads=True)
+
     debug.log("DAEMON", f"Starting DETM daemon on {DAEMON_HOST}:{DAEMON_PORT}")
     debug.log("DAEMON", f"Display: {config.DISPLAY}, Vision: {config.VISION_BACKEND}/{config.VISION_MODEL}")
     debug.log("DAEMON", f"Data dir: {config.DATA_DIR}")

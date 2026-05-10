@@ -1013,7 +1013,10 @@ class OpenRouterVLMProvider(LiveUIProvider):
                 "success": False,
                 "actions_taken": 0,
             }
-        disp_w, disp_h = display_size_override or _get_display_size(display)
+        if display_size_override:
+            disp_w, disp_h = display_size_override
+        else:
+            disp_w, disp_h = await asyncio.get_running_loop().run_in_executor(None, _get_display_size, display)
         sid = session.id[:8] if session else "--------"
         _dbg.log("LIVE", f"[{sid}] backend={backend_name} model={model} base={base_url}")
 
